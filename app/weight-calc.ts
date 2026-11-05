@@ -38,10 +38,44 @@ export type ModuleBreakdown = {
   tensors: number;
 };
 
+/**
+ * 比 TensorModule 更细的类别：把 attention 拆成 QKV / O-Proj / 稀疏索引器，
+ * 便于按「类别 × 切分方式」汇总单卡占用。
+ */
+export type WeightCategory =
+  | "routed_expert"
+  | "shared_expert"
+  | "attention_qkv"
+  | "attention_oproj"
+  | "sparse_indexer"
+  | "dense_mlp"
+  | "embedding"
+  | "lm_head"
+  | "router"
+  | "norm"
+  | "vision"
+  | "other";
+
+/** 类别 → 切分维度（replicated 表示每张卡保留完整副本）。 */
+export type CategoryParallel = keyof WeightParallel | "replicated";
+
+export type WeightCategoryRow = {
+  category: WeightCategory;
+  label: string;
+  parallel: CategoryParallel;
+  /** 实际除数：replicated 为 1 */
+  divisor: number;
+  full: number;
+  perDevice: number;
+  tensors: number;
+};
+
 export type WeightResult = {
   fullWeight: number;
   perDeviceWeight: number;
   breakdown: Record<TensorModule, ModuleBreakdown>;
+  /** 更细的类别汇总（按固定顺序，数值与 breakdown 完全对账） */
+  categories: WeightCategoryRow[];
 };
 
 const VISION = ["vision", "visual", "projector", "patch_merge", "vae", "vision_model"];
@@ -80,8 +114,69 @@ function isMoERoutedExpert(name: string): boolean {
   return n.includes(".moe.") && MOE_EXPERT_MATRIX.some((w) => n.includes(w));
 }
 
-/** 将张量名归类到模块类型。量化辅助张量（weight_scale 等）跟随主权重归类。 */
-export function classifyTensor(name: string): TensorModule {
+const CATEGORY_LABEL: Record<WeightCategory, string> = {
+  routed_expert: "路由专家（Routed Expert）",
+  shared_expert: "共享专家（Share Expert）",
+  attention_qkv: "Attention QKV / Gate",
+  attention_oproj: "Attention O-Proj",
+  sparse_indexer: "Sparse Indexer",
+  dense_mlp: "Dense MLP",
+  embedding: "Embedding（词嵌入）",
+  lm_head: "LM Head / MTP 输出头",
+  router: "Router Gate",
+  norm: "Norm（含 q/k norm）",
+  vision: "视觉塔（Vision Tower）",
+  other: "其他（MTP 融合等）",
+};
+
+/** 类别展示顺序（导出时再按单卡占用降序重排）。 */
+export const WEIGHT_CATEGORY_ORDER: WeightCategory[] = [
+  "routed_expert",
+  "attention_qkv",
+  "vision",
+  "shared_expert",
+  "attention_oproj",
+  "lm_head",
+  "dense_mlp",
+  "router",
+  "other",
+  "embedding",
+  "sparse_indexer",
+  "norm",
+];
+
+const CATEGORY_PARALLEL: Record<WeightCategory, CategoryParallel> = {
+  routed_expert: "ep",
+  shared_expert: "sharedExpertTp",
+  attention_qkv: "attentionTp",
+  attention_oproj: "oprojTp",
+  sparse_indexer: "attentionTp",
+  dense_mlp: "tp",
+  embedding: "embeddingTp",
+  lm_head: "lmHeadTp",
+  router: "replicated",
+  norm: "replicated",
+  vision: "replicated",
+  other: "replicated",
+};
+
+const CATEGORY_MODULE: Record<WeightCategory, TensorModule> = {
+  routed_expert: "routed_expert",
+  shared_expert: "shared_expert",
+  attention_qkv: "attention",
+  attention_oproj: "attention",
+  sparse_indexer: "attention",
+  dense_mlp: "dense_mlp",
+  embedding: "embedding",
+  lm_head: "lm_head",
+  router: "router",
+  norm: "norm",
+  vision: "vision",
+  other: "other",
+};
+
+/** 将张量名归类到细分权重类别。量化辅助张量（weight_scale 等）跟随主权重归类。 */
+export function categorizeTensor(name: string): WeightCategory {
   if (includes(name, VISION)) return "vision";
   if (includes(name, EMBEDDING)) return "embedding";
   if (includes(name, LM_HEAD)) return "lm_head";
@@ -90,13 +185,84 @@ export function classifyTensor(name: string): TensorModule {
   if (includes(name, ROUTER)) return "router";
   if (isMoERoutedExpert(name)) return "routed_expert";
   if (includes(name, NORM)) return "norm";
-  if (includes(name, ATTENTION)) return "attention";
+  // 稀疏索引器单独成类，但仍按注意力 TP 切分。
+  if (name.toLowerCase().includes("indexer")) return "sparse_indexer";
+  if (includes(name, ATTENTION)) return isOproj(name) ? "attention_oproj" : "attention_qkv";
   if (includes(name, DENSE_MLP)) return "dense_mlp";
   return "other";
 }
 
+export function weightCategoryLabel(category: WeightCategory): string {
+  return CATEGORY_LABEL[category];
+}
+
+/** 将张量名归类到模块类型（与细分类别一一对应）。 */
+export function classifyTensor(name: string): TensorModule {
+  return CATEGORY_MODULE[categorizeTensor(name)];
+}
+
 function isOproj(name: string): boolean {
   return includes(name, OPROJ);
+}
+
+/** 细分类别对应的切分除数。 */
+export function divisorForCategory(
+  category: WeightCategory,
+  p: WeightParallel,
+): number {
+  const safe = (v: number, dflt: number) => (Number.isFinite(v) && v > 0 ? v : dflt);
+  const tp = safe(p.tp, 1);
+  switch (CATEGORY_PARALLEL[category]) {
+    case "ep":
+      return safe(p.ep, 1);
+    case "sharedExpertTp":
+      return safe(p.sharedExpertTp, 1);
+    case "attentionTp":
+      return safe(p.attentionTp, tp);
+    case "oprojTp":
+      return safe(p.oprojTp, tp);
+    case "embeddingTp":
+      return safe(p.embeddingTp, tp);
+    case "lmHeadTp":
+      return safe(p.lmHeadTp, tp);
+    case "tp":
+      return tp;
+    default:
+      return 1;
+  }
+}
+
+export function categoryParallelOf(category: WeightCategory): CategoryParallel {
+  return CATEGORY_PARALLEL[category];
+}
+
+/** 按「类别 × 切分方式」汇总全量与单卡字节。 */
+export function calculateWeightCategories(
+  tensors: WeightTensor[],
+  p: WeightParallel,
+): WeightCategoryRow[] {
+  const rows = new Map<WeightCategory, WeightCategoryRow>();
+  for (const category of WEIGHT_CATEGORY_ORDER) {
+    rows.set(category, {
+      category,
+      label: CATEGORY_LABEL[category],
+      parallel: CATEGORY_PARALLEL[category],
+      divisor: divisorForCategory(category, p),
+      full: 0,
+      perDevice: 0,
+      tensors: 0,
+    });
+  }
+  for (const t of tensors) {
+    const row = rows.get(categorizeTensor(t.name)) ?? rows.get("other")!;
+    const bytes = t.bytes || 0;
+    row.full += bytes;
+    row.perDevice += bytes / row.divisor;
+    row.tensors += 1;
+  }
+  return WEIGHT_CATEGORY_ORDER.map((category) => rows.get(category)!).filter(
+    (row) => row.tensors > 0,
+  );
 }
 
 function newBreakdown(): Record<TensorModule, ModuleBreakdown> {
@@ -161,5 +327,10 @@ export function calculateWeightFromTensors(
   }
 
   const perDeviceWeight = Object.values(breakdown).reduce((s, b) => s + b.perDevice, 0);
-  return { fullWeight, perDeviceWeight, breakdown };
+  return {
+    fullWeight,
+    perDeviceWeight,
+    breakdown,
+    categories: calculateWeightCategories(tensors, p),
+  };
 }

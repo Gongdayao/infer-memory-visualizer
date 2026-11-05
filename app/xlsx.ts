@@ -11,6 +11,8 @@ export type SheetSpec = {
   columnWidths?: number[];
   /** 行数据；第一行视为表头（加粗并冻结） */
   rows: Cell[][];
+  /** 额外需要加粗的行号（0 起，表头行自动加粗） */
+  boldRows?: number[];
 };
 
 const XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -57,10 +59,12 @@ function sheetXml(sheet: SheetSpec): string {
   const cols = Array.from({ length: columnCount }, (_, i) =>
     `<col min="${i + 1}" max="${i + 1}" width="${widths[i] ?? 18}" customWidth="1"/>`,
   ).join("");
+  const boldRows = new Set(sheet.boldRows ?? []);
   const body = rows
     .map((row, rowIndex) => {
+      const bold = rowIndex === 0 || boldRows.has(rowIndex);
       const cells = row
-        .map((value, columnIndex) => cellXml(`${columnName(columnIndex)}${rowIndex + 1}`, value, rowIndex === 0))
+        .map((value, columnIndex) => cellXml(`${columnName(columnIndex)}${rowIndex + 1}`, value, bold))
         .join("");
       return `<row r="${rowIndex + 1}">${cells}</row>`;
     })

@@ -1,9 +1,10 @@
-// 把当前页面的计算结果整理成多张工作表，供「导出 Excel」按钮使用。
-// 纯函数部分（buildExportSheets）可在 Node 测试中直接断言，浏览器侧只负责下载。
+// 把当前页面的计算结果整理成一张工作表，供「导出 Excel」按钮使用。
+// 主表按「权重（张量）类别 × 切分方式」汇总全模型/单卡占用，表格下方隔行给出基础信息。
+// 纯函数部分（buildExportSheet）可在 Node 测试中直接断言，浏览器侧只负责下载。
 
 import type { ModelStructure } from "./config-model";
 import type { KvCacheBreakdown, KvCacheModelInfo, CachePrecision } from "./kv-cache-model";
-import type { WeightResult, TensorModule } from "./weight-calc";
+import type { WeightCategoryRow } from "./weight-calc";
 import type { Cell, SheetSpec } from "./xlsx";
 
 const GIB = 1024 ** 3;
@@ -60,7 +61,11 @@ export type ExportResult = {
   attentionTp: number;
   kvCacheBreakdown: KvCacheBreakdown | null;
   kvCacheInfo?: KvCacheModelInfo;
-  weightResult: WeightResult | null;
+  weightResult: {
+    fullWeight: number;
+    perDeviceWeight: number;
+    categories: WeightCategoryRow[];
+  } | null;
 };
 
 export type ExportContext = {
@@ -75,23 +80,23 @@ export type ExportContext = {
   generatedAt?: Date;
 };
 
-const MODULE_LABEL: Record<TensorModule, string> = {
-  routed_expert: "路由专家",
-  shared_expert: "共享专家",
-  dense_mlp: "Dense MLP",
-  attention: "Attention",
-  embedding: "Embedding",
-  lm_head: "LM Head",
-  router: "Router",
-  norm: "Norm",
-  vision: "视觉塔",
-  other: "其他",
-};
+export const EXPORT_SHEET_NAME = "权重与显存";
 
 const PRECISION_LABEL: Record<CachePrecision, string> = {
   bf16_fp16: "BF16 / FP16",
   fp8_int8: "FP8 / INT8",
   fp4_int4: "FP4 / INT4",
+};
+
+const PARALLEL_LABEL: Record<string, string> = {
+  tp: "TP",
+  ep: "EP",
+  attentionTp: "attentionTp",
+  oprojTp: "oprojTp",
+  embeddingTp: "embeddingTp",
+  lmHeadTp: "lmHeadTp",
+  sharedExpertTp: "sharedExpertTp",
+  replicated: "复本",
 };
 
 function round(value: number, digits = 2): number {
@@ -100,7 +105,11 @@ function round(value: number, digits = 2): number {
 }
 
 function gib(bytes: number): number {
-  return round(bytes / GIB, 3);
+  return round(bytes / GIB, 2);
+}
+
+function gibText(bytes: number): string {
+  return `${gib(bytes).toFixed(2)} GiB`;
 }
 
 function timestamp(date: Date): string {
@@ -111,173 +120,135 @@ function timestamp(date: Date): string {
   );
 }
 
-function percent(value: number, total: number): number {
-  return total > 0 ? round((value / total) * 100, 2) : 0;
+/** 「切分方式」列：复本或具体切分维度 ÷ 除数。 */
+function splitLabel(row: WeightCategoryRow): string {
+  if (row.parallel === "replicated") return "复本（÷1）";
+  const name = PARALLEL_LABEL[row.parallel] ?? row.parallel;
+  return row.divisor === 1 ? `${name} ÷1（复本）` : `${name} ÷${row.divisor}`;
 }
 
-function kvRows(ctx: ExportContext): Cell[][] {
-  const { result } = ctx;
-  const breakdown = result.kvCacheBreakdown;
-  const info = result.kvCacheInfo;
-  const rows: Cell[][] = [["项目", "值", "单位"]];
-  if (!breakdown || !info) {
-    rows.push(["KV Cache", "该模型未收录上游 KV Cache 公式", ""]);
-    return rows;
-  }
-  rows.push(
-    ["上游 model id", ctx.kvCacheModelId ?? "", ""],
-    ["KV 精度", PRECISION_LABEL[ctx.inputs.kvPrecision] ?? ctx.inputs.kvPrecision, ""],
-    ["Index 精度", PRECISION_LABEL[ctx.inputs.indexCachePrecision] ?? ctx.inputs.indexCachePrecision, ""],
-    ["缓存 tokens", ctx.inputs.kvCacheTokens, "token"],
-    ["并发序列数", ctx.inputs.kvCacheSequences, "seq"],
-    ["有效 KV 层数", breakdown.effectiveKvLayers, "层"],
-    ["有效 Index 层数", breakdown.effectiveIndexLayers, "层"],
-    ["KV heads", info.kvHeads, "个"],
-    ["head_dim", info.headDim, "维"],
-    ["Index head_dim", info.indexHeadDim, "维"],
-    ["每元素 KV 字节", breakdown.kvBytesPerElement, "B"],
-    ["每元素 Index 字节", breakdown.indexBytesPerElement, "B"],
-    ["KV Cache", breakdown.kvCache, "B"],
-    ["KV Cache (GiB)", gib(breakdown.kvCache), "GiB"],
-    ["Index Cache", breakdown.indexCache, "B"],
-    ["Index Cache (GiB)", gib(breakdown.indexCache), "GiB"],
-    ["单卡合计", breakdown.total, "B"],
-    ["单卡合计 (GiB)", gib(breakdown.total), "GiB"],
-  );
-  return rows;
+/** 每组是一行里的若干 [标题, 值]，按 6 列铺开（空位补空字符串）。 */
+function pairRows(groups: [string, Cell][][]): Cell[][] {
+  return groups.map((group) => {
+    const row: Cell[] = [];
+    for (const [label, value] of group) row.push(label, value);
+    while (row.length < 6) row.push("");
+    return row;
+  });
 }
 
-function breakdownRows(ctx: ExportContext): Cell[][] {
-  const rows: Cell[][] = [["模块", "全量字节", "全量 (GiB)", "单卡字节", "单卡 (GiB)", "张量数"]];
-  const breakdown = ctx.result.weightResult?.breakdown;
-  if (!breakdown) {
-    rows.push(["（未加载权重）", 0, 0, 0, 0, 0]);
-    return rows;
-  }
-  for (const [module, item] of Object.entries(breakdown) as [TensorModule, { full: number; perDevice: number; tensors: number }][]) {
-    rows.push([MODULE_LABEL[module] ?? module, item.full, gib(item.full), item.perDevice, gib(item.perDevice), item.tensors]);
-  }
-  rows.push([
-    "合计",
-    ctx.result.fullWeight,
-    gib(ctx.result.fullWeight),
-    ctx.result.weight,
-    gib(ctx.result.weight),
-    Object.values(breakdown).reduce((sum, item) => sum + item.tensors, 0),
-  ]);
-  return rows;
-}
-
-function memoryRows(ctx: ExportContext): Cell[][] {
-  const { result } = ctx;
-  const total = result.total;
-  const items: { label: string; bytes: number; note: string }[] = [
-    { label: "权重占用", bytes: result.weight, note: "逐张量按模块切分后的单卡权重" },
-    { label: "KV + Index Cache", bytes: result.kvCache, note: "上游 kv-cache-calculator 公式" },
-    { label: "激活占用", bytes: result.activation, note: "hidden states + residual + MoE buffer" },
-    { label: "HCCL buffer", bytes: result.hccl, note: "DP / TP / EP / MC2" },
-    { label: "ACLGraph 占用", bytes: result.graph, note: "按图数量估算" },
-    { label: "CANN + PTA + 算子", bytes: result.cann, note: "手动预留" },
-    { label: "Device OS", bytes: result.deviceOS, note: "固定 4.25 GiB" },
+function mainTableRows(categories: WeightCategoryRow[]): Cell[][] {
+  const rows: Cell[][] = [
+    ["权重（张量）类别", "切分方式", "全模型 bytes", "全模型 GiB", "单卡 bytes", "单卡 GiB"],
   ];
-  const rows: Cell[][] = [["项目", "字节数", "GiB", "占比(%)", "说明"]];
-  for (const item of items) {
-    if (item.bytes === 0 && item.label.startsWith("权重")) continue;
-    rows.push([item.label, item.bytes, gib(item.bytes), percent(item.bytes, total), item.note]);
+  const sorted = [...categories].sort((a, b) => b.perDevice - a.perDevice);
+  for (const row of sorted) {
+    rows.push([
+      row.label,
+      splitLabel(row),
+      row.full,
+      gib(row.full),
+      Math.round(row.perDevice),
+      gib(row.perDevice),
+    ]);
   }
-  rows.push(["单卡合计", total, gib(total), 100, "含以上全部项目"]);
+  const fullTotal = sorted.reduce((sum, row) => sum + row.full, 0);
+  const perTotal = sorted.reduce((sum, row) => sum + row.perDevice, 0);
+  rows.push(["合计（单卡权重）", "—", "", "", Math.round(perTotal), gib(perTotal)]);
+  rows.push(["全模型权重合计", "—", fullTotal, gib(fullTotal), "", ""]);
   return rows;
 }
 
-function detailRows(ctx: ExportContext): Cell[][] {
-  const { result, inputs } = ctx;
-  const rows: Cell[][] = [["明细项", "字节数", "MiB", "公式/说明"]];
-  const push = (label: string, bytes: number, formula: string) => {
-    rows.push([label, bytes, round(bytes / 1024 ** 2, 2), formula]);
+function metaRows(ctx: ExportContext, tensors: number): Cell[][] {
+  const { weight, struct, inputs, result } = ctx;
+  const pairs: [string, Cell][] = [
+    ["导出时间", timestamp(ctx.generatedAt ?? new Date())],
+    ["厂商 owner", weight.owner],
+    ["原始权重", weight.rawName],
+    ["当前权重", `${weight.owner}/${weight.name}`],
+    ["权重类型", weight.kind === "raw" ? "官方原始权重" : "Eco-Tech 量化权重"],
+    ["张量总数", tensors],
+    ["ModelScope", `https://modelscope.cn/models/${weight.owner}/${weight.name}`],
+    ["Hidden size", struct.hiddenSize],
+    ["层数", struct.numLayers],
+    ["专家总数", struct.expertCount],
+    ["TopK 专家", struct.topK],
+    ["KV 头数", struct.kvHeads],
+    ["head_dim", struct.headDim],
+    ["词表大小", struct.vocabSize],
+    ["MoE intermediate", struct.moeIntermediateSize],
+    ["含视觉塔", struct.hasVision ? "是" : "否"],
+    ["TP", inputs.tpSize],
+    ["DP", inputs.dpSize],
+    ["EP size", ctx.epSize],
+    ["attentionTp", inputs.attentionTpSize ?? inputs.tpSize],
+    ["oprojTp", inputs.oprojTpSize ?? inputs.tpSize],
+    ["embeddingTp", inputs.embeddingTpSize ?? inputs.tpSize],
+    ["lmHeadTp", inputs.lmHeadTpSize ?? inputs.tpSize],
+    ["sharedExpertTp", inputs.sharedExpertTpSize],
+    ["本地专家数", round(result.localExperts, 2)],
+    ["Max batched tokens", inputs.maxBatchedTokens],
+    ["Max BS", inputs.maxBS],
+    ["MTP 层数", inputs.mtpLayers],
+    ["单卡权重", gibText(result.weight)],
+    ["KV + Index Cache", gibText(result.kvCache)],
+    ["激活占用", gibText(result.activation)],
+    ["HCCL buffer", gibText(result.hccl)],
+    ["ACLGraph", gibText(result.graph)],
+    ["CANN + PTA + 算子", gibText(result.cann)],
+    ["Device OS", gibText(result.deviceOS)],
+    ["单卡总显存", gibText(result.total)],
+  ];
+  if (result.kvCacheBreakdown) {
+    pairs.push(
+      ["KV 精度", PRECISION_LABEL[inputs.kvPrecision] ?? inputs.kvPrecision],
+      ["Index 精度", PRECISION_LABEL[inputs.indexCachePrecision] ?? inputs.indexCachePrecision],
+      [
+        "有效 KV / Index 层",
+        `${result.kvCacheBreakdown.effectiveKvLayers} / ${result.kvCacheBreakdown.effectiveIndexLayers}`,
+      ],
+    );
+  }
+  // 分组：URL 独占一行，其余每行 3 组，横向铺满，避免只占两列却拉很多行。
+  const groups: [string, Cell][][] = [];
+  let current: [string, Cell][] = [];
+  for (const pair of pairs) {
+    const isLink = pair[0] === "ModelScope";
+    if (isLink) {
+      if (current.length > 0) groups.push(current);
+      groups.push([pair]);
+      current = [];
+      continue;
+    }
+    current.push(pair);
+    if (current.length === 3) {
+      groups.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return pairRows(groups);
+}
+
+/**
+ * 生成导出用的单张工作表：
+ * 1. 主表：类别 / 切分方式 / 全模型 bytes,GiB / 单卡 bytes,GiB，末尾两行给出单卡合计与全模型合计；
+ * 2. 空两行后给出基础信息（横向多列对齐，避免只占两列却拉很多行）。
+ */
+export function buildExportSheet(ctx: ExportContext): SheetSpec {
+  const categories = ctx.result.weightResult?.categories ?? [];
+  const rows = mainTableRows(categories);
+  const tensors = categories.reduce((sum, row) => sum + row.tensors, 0);
+  rows.push([], []);
+  const sectionRow = rows.length;
+  rows.push(["基础信息", "", "", "", "", ""]);
+  rows.push(...metaRows(ctx, tensors));
+  return {
+    name: EXPORT_SHEET_NAME,
+    columnWidths: [30, 24, 20, 14, 20, 14],
+    rows,
+    boldRows: [sectionRow],
   };
-  push("Hidden states + residual", result.hiddenResidual, `2 × 2 B × maxBatchedTokens(${inputs.maxBatchedTokens}) × hidden × dp`);
-  push("MoE 激活 buffer", result.moeBuffers, "4 × 2 B × dp × tokens × topK ÷ EP × hidden");
-  push("HCCL DP buffer", result.hcclDP, `max(ceil((dp+1)×4 ÷ 1024²), 50) × 2 MB`);
-  push("HCCL TP buffer", result.hcclTP, "200 MB × 2");
-  push("HCCL EP buffer", result.hcclEP, "200 MB × 2");
-  push("EP Dispatch", result.epDispatch, "2 × 本地专家数 × maxBS × EP × alignedDispatch");
-  push("EP Combine", result.epCombine, "2 × topK × maxBS × alignedCombine");
-  push("HCCL MC2 小计", result.hcclMC2, "EP Dispatch + EP Combine");
-  push("HCCL 合计", result.hccl, "DP + TP + EP + MC2");
-  push("ACLGraph", result.graph, `${inputs.graphCount} 张图 ÷ 5 × 0.27 GB`);
-  push("CANN + PTA + 算子", result.cann, `${inputs.cannGB} GiB 预留`);
-  push("Device OS", result.deviceOS, "固定 4.25 GiB");
-  rows.push(["对齐后 dispatch 行字节", result.alignedDispatch, "", "align(2 × hidden, 32) + 64 后再按 480→512 对齐"]);
-  rows.push(["对齐后 combine 行字节", result.alignedCombine, "", "align(2 × hidden, 512)"]);
-  return rows;
-}
-
-function summaryRows(ctx: ExportContext): Cell[][] {
-  const { weight, struct, inputs, result, epSize } = ctx;
-  const rows: Cell[][] = [["项目", "值"]];
-  const push = (label: string, value: Cell) => rows.push([label, value]);
-
-  push("导出时间", timestamp(ctx.generatedAt ?? new Date()));
-  push("厂商 owner", weight.owner);
-  push("原始权重", weight.rawName);
-  push("当前权重", `${weight.owner}/${weight.name}`);
-  push("权重类型", weight.kind === "raw" ? "官方原始权重" : "Eco-Tech 量化权重");
-  push("ModelScope", `https://modelscope.cn/models/${weight.owner}/${weight.name}`);
-  push("", "");
-  push("Hidden size", struct.hiddenSize);
-  push("层数", struct.numLayers);
-  push("注意力头数", struct.attentionHeads);
-  push("KV 头数", struct.kvHeads);
-  push("head_dim", struct.headDim);
-  push("词表大小", struct.vocabSize);
-  push("专家总数", struct.expertCount);
-  push("TopK 专家", struct.topK);
-  push("共享专家", struct.sharedExperts);
-  push("Dense intermediate", struct.intermediateSize);
-  push("MoE intermediate", struct.moeIntermediateSize);
-  push("含视觉塔", struct.hasVision ? "是" : "否");
-  push("architectures", struct.architectures.join(", "));
-  push("model_type", struct.modelType);
-  push("", "");
-  push("TP", inputs.tpSize);
-  push("DP", inputs.dpSize);
-  push("EP size", epSize);
-  push("Attention TP", inputs.attentionTpSize ?? inputs.tpSize);
-  push("O-Proj TP", inputs.oprojTpSize ?? inputs.tpSize);
-  push("Embedding TP", inputs.embeddingTpSize ?? inputs.tpSize);
-  push("LM Head TP", inputs.lmHeadTpSize ?? inputs.tpSize);
-  push("Shared Expert TP", inputs.sharedExpertTpSize);
-  push("本地专家数", round(result.localExperts, 4));
-  push("", "");
-  push("Max batched tokens", inputs.maxBatchedTokens);
-  push("Max BS", inputs.maxBS);
-  push("MTP 层数", inputs.mtpLayers);
-  push("", "");
-  push("单卡权重 (GiB)", gib(result.weight));
-  push("全量权重 (GiB)", gib(result.fullWeight));
-  push("KV + Index Cache (GiB)", gib(result.kvCache));
-  push("激活占用 (GiB)", gib(result.activation));
-  push("HCCL buffer (GiB)", gib(result.hccl));
-  push("ACLGraph (GiB)", gib(result.graph));
-  push("CANN + PTA + 算子 (GiB)", gib(result.cann));
-  push("Device OS (GiB)", gib(result.deviceOS));
-  push("单卡总显存 (GiB)", gib(result.total));
-  push("单卡总显存 (字节)", result.total);
-  return rows;
-}
-
-/** 组装工作簿：概要 / 显存构成 / 权重模块 / KV Cache / 明细。 */
-export function buildExportSheets(ctx: ExportContext): SheetSpec[] {
-  const sheets: SheetSpec[] = [
-    { name: "概要", columnWidths: [26, 46], rows: summaryRows(ctx) },
-    { name: "显存构成", columnWidths: [24, 18, 12, 12, 46], rows: memoryRows(ctx) },
-    { name: "权重模块", columnWidths: [18, 18, 14, 18, 14, 10], rows: breakdownRows(ctx) },
-  ];
-  if (ctx.result.kvCacheBreakdown) {
-    sheets.push({ name: "KV Cache", columnWidths: [22, 30, 10], rows: kvRows(ctx) });
-  }
-  sheets.push({ name: "明细", columnWidths: [26, 18, 12, 60], rows: detailRows(ctx) });
-  return sheets;
 }
 
 /** 形如 infer-memory-Step-5-Preview-20261105-1220.xlsx 的文件名。 */

@@ -5,7 +5,7 @@ import { MODEL_INDEX, QUANT_OWNER, kvCacheModelIdOf, type Vendor } from "./model
 import { CACHE_PRECISIONS, calculateKvCache, getKvCacheModelInfo, type CachePrecision } from "./kv-cache-model";
 import { fetchModelWeightData, type ModelWeightData, type WeightLoadProgress } from "./modelscope";
 import { calculateWeightFromTensors, type TensorModule } from "./weight-calc";
-import { buildExportSheets, exportFileName } from "./export-excel";
+import { buildExportSheet, exportFileName } from "./export-excel";
 import { downloadXlsx } from "./xlsx";
 
 type Inputs = {
@@ -298,7 +298,7 @@ export default function Home() {
   const exportExcel = () => {
     if (!weight || !struct || !result.weightResult) return;
     const exportWeight = { owner: weight.owner, name: weight.name, kind: weight.kind, rawName: weight.rawName };
-    const sheets = buildExportSheets({
+    const sheet = buildExportSheet({
       weight: exportWeight,
       struct,
       inputs,
@@ -306,7 +306,7 @@ export default function Home() {
       epSize,
       kvCacheModelId,
     });
-    downloadXlsx(sheets, exportFileName(exportWeight));
+    downloadXlsx([sheet], exportFileName(exportWeight));
   };
 
   const categories = [
