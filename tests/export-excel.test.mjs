@@ -121,18 +121,18 @@ function step5Context(overrides = {}) {
   };
 }
 
-test("工作簿只有一张表，主表列头固定为六列", () => {
+test("工作簿只有一张表，主表列头固定为五列", () => {
   const sheet = buildExportSheet(step5Context());
   assert.equal(sheet.name, EXPORT_SHEET_NAME);
   assert.deepEqual(sheet.rows[0], [
     "权重（张量）类别",
     "切分方式",
     "全模型 bytes",
-    "全模型 GiB",
     "单卡 bytes",
     "单卡 GiB",
   ]);
-  assert.deepEqual(sheet.columnWidths, [30, 24, 20, 14, 20, 14]);
+  assert.deepEqual(sheet.columnWidths, [30, 24, 20, 20, 14]);
+  assert.equal(sheet.rows[0].length, 5, "严格五列");
 });
 
 test("类别行按单卡 GiB 降序，切分方式按类别给出 TP / EP / 复本", () => {
@@ -141,9 +141,10 @@ test("类别行按单卡 GiB 降序，切分方式按类别给出 TP / EP / 复�
   assert.equal(first[0], "路由专家（Routed Expert）");
   assert.equal(first[1], "EP ÷32");
   assert.equal(first[2], 604_721_627_136);
-  assert.equal(first[5], 17.6);
+  assert.equal(first[3], 18_897_550_848);
+  assert.equal(first[4], 17.6);
 
-  const perCards = rows.slice(1, 1 + STEP5_CATEGORIES.length).map((row) => row[4]);
+  const perCards = rows.slice(1, 1 + STEP5_CATEGORIES.length).map((row) => row[3]);
   const sorted = [...perCards].sort((a, b) => b - a);
   assert.deepEqual(perCards, sorted, "应按单卡占用降序");
 
@@ -158,16 +159,20 @@ test("合计行汇总单卡，末行给出全模型 bytes 与 GiB", () => {
   const rows = buildExportSheet(step5Context()).rows;
   const lastCategoryIndex = 1 + STEP5_CATEGORIES.length - 1;
   const perRow = rows[lastCategoryIndex + 1];
+  assert.equal(perRow.length, 5);
   assert.equal(perRow[0], "合计（单卡权重）");
-  assert.equal(perRow[4], Math.round(PER_TOTAL));
-  assert.equal(perRow[5], Math.round((PER_TOTAL / GIB) * 100) / 100);
+  assert.equal(perRow[3], Math.round(PER_TOTAL));
+  assert.equal(perRow[4], Math.round((PER_TOTAL / GIB) * 100) / 100);
   assert.equal(perRow[2], "");
 
+  // 末行：两组标签-数值横向铺开，全模型 bytes 落在全模型列，全模型 GiB 紧邻其后
   const fullRow = rows[lastCategoryIndex + 2];
+  assert.equal(fullRow.length, 5);
   assert.equal(fullRow[0], "全模型权重合计");
+  assert.equal(fullRow[1], "全模型 bytes");
   assert.equal(fullRow[2], FULL_TOTAL);
-  assert.equal(fullRow[3], Math.round((FULL_TOTAL / GIB) * 100) / 100);
-  assert.equal(fullRow[4], "");
+  assert.equal(fullRow[3], "全模型 GiB");
+  assert.equal(fullRow[4], Math.round((FULL_TOTAL / GIB) * 100) / 100);
 });
 
 test("主表下方隔行给出基础信息，且横向多列排布", () => {
@@ -178,11 +183,10 @@ test("主表下方隔行给出基础信息，且横向多列排布", () => {
   assert.ok(rows[section - 2].length === 0, "基础信息前应空两行");
 
   const body = rows.slice(section + 1);
-  assert.ok(body.every((row) => row.length === 6), "基础信息每行应铺满六列");
+  assert.ok(body.every((row) => row.length === 5), "基础信息每行应铺满五列");
   const pairs = body.flatMap((row) => [
     [row[0], row[1]],
     [row[2], row[3]],
-    [row[4], row[5]],
   ]).filter(([label]) => label !== "");
   const lookup = Object.fromEntries(pairs);
   assert.equal(lookup["导出时间"], "2026-11-05 15:20:00");
@@ -203,7 +207,7 @@ test("无 KV 公式或无权重时不报错，主表仍保留合计行", () => {
     result: { ...ctx.result, kvCache: 0, kvCacheBreakdown: null, kvCacheInfo: undefined },
   });
   assert.equal(rowIndex(noKv.rows, "KV 精度"), -1, "无 KV 时不写精度行");
-  assert.equal(findRow(noKv.rows, "合计（单卡权重）")[4], Math.round(PER_TOTAL));
+  assert.equal(findRow(noKv.rows, "合计（单卡权重）")[3], Math.round(PER_TOTAL));
 
   const noWeights = buildExportSheet({
     ...ctx,
@@ -211,7 +215,7 @@ test("无 KV 公式或无权重时不报错，主表仍保留合计行", () => {
   });
   assert.equal(noWeights.rows[1][0], "合计（单卡权重）");
   assert.equal(noWeights.rows[2][0], "全模型权重合计");
-  assert.equal(noWeights.rows[1][4], 0);
+  assert.equal(noWeights.rows[1][3], 0);
 });
 
 test("文件名包含 owner、权重名与时间戳，并去掉非法字符", () => {

@@ -127,35 +127,27 @@ function splitLabel(row: WeightCategoryRow): string {
   return row.divisor === 1 ? `${name} ÷1（复本）` : `${name} ÷${row.divisor}`;
 }
 
-/** 每组是一行里的若干 [标题, 值]，按 6 列铺开（空位补空字符串）。 */
+/** 每组是一行里的若干 [标题, 值]，按主表 5 列铺开（空位补空字符串）。 */
 function pairRows(groups: [string, Cell][][]): Cell[][] {
   return groups.map((group) => {
     const row: Cell[] = [];
     for (const [label, value] of group) row.push(label, value);
-    while (row.length < 6) row.push("");
+    while (row.length < 5) row.push("");
     return row;
   });
 }
 
 function mainTableRows(categories: WeightCategoryRow[]): Cell[][] {
-  const rows: Cell[][] = [
-    ["权重（张量）类别", "切分方式", "全模型 bytes", "全模型 GiB", "单卡 bytes", "单卡 GiB"],
-  ];
+  const rows: Cell[][] = [["权重（张量）类别", "切分方式", "全模型 bytes", "单卡 bytes", "单卡 GiB"]];
   const sorted = [...categories].sort((a, b) => b.perDevice - a.perDevice);
   for (const row of sorted) {
-    rows.push([
-      row.label,
-      splitLabel(row),
-      row.full,
-      gib(row.full),
-      Math.round(row.perDevice),
-      gib(row.perDevice),
-    ]);
+    rows.push([row.label, splitLabel(row), row.full, Math.round(row.perDevice), gib(row.perDevice)]);
   }
   const fullTotal = sorted.reduce((sum, row) => sum + row.full, 0);
   const perTotal = sorted.reduce((sum, row) => sum + row.perDevice, 0);
-  rows.push(["合计（单卡权重）", "—", "", "", Math.round(perTotal), gib(perTotal)]);
-  rows.push(["全模型权重合计", "—", fullTotal, gib(fullTotal), "", ""]);
+  rows.push(["合计（单卡权重）", "—", "", Math.round(perTotal), gib(perTotal)]);
+  // 末行把「全模型 bytes / 全模型 GiB」两组标签-数值横向铺在 5 列里，不额外占列。
+  rows.push(["全模型权重合计", "全模型 bytes", fullTotal, "全模型 GiB", gib(fullTotal)]);
   return rows;
 }
 
@@ -221,7 +213,7 @@ function metaRows(ctx: ExportContext, tensors: number): Cell[][] {
       continue;
     }
     current.push(pair);
-    if (current.length === 3) {
+    if (current.length === 2) {
       groups.push(current);
       current = [];
     }
@@ -241,11 +233,11 @@ export function buildExportSheet(ctx: ExportContext): SheetSpec {
   const tensors = categories.reduce((sum, row) => sum + row.tensors, 0);
   rows.push([], []);
   const sectionRow = rows.length;
-  rows.push(["基础信息", "", "", "", "", ""]);
+  rows.push(["基础信息", "", "", "", ""]);
   rows.push(...metaRows(ctx, tensors));
   return {
     name: EXPORT_SHEET_NAME,
-    columnWidths: [30, 24, 20, 14, 20, 14],
+    columnWidths: [30, 24, 20, 20, 14],
     rows,
     boldRows: [sectionRow],
   };
