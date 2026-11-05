@@ -218,6 +218,33 @@ test("无 KV 公式或无权重时不报错，主表仍保留合计行", () => {
   assert.equal(noWeights.rows[1][3], 0);
 });
 
+test("样式按行类型分配：表头/数值/合计/区块/键值区分", () => {
+  const sheet = buildExportSheet(step5Context());
+  const style = sheet.cellStyle;
+  assert.ok(style);
+  assert.equal(style(0, 0, "权重（张量）类别"), "header");
+  assert.equal(style(1, 0, "路由专家"), "value");
+  assert.equal(style(1, 2, 604_721_627_136), "bytes");
+  assert.equal(style(1, 4, 17.6), "decimal");
+
+  const rows = sheet.rows;
+  const totalRow = rowIndex(rows, "合计（单卡权重）");
+  const fullRow = rowIndex(rows, "全模型权重合计");
+  assert.equal(style(totalRow, 0, "合计（单卡权重）"), "totalLabel");
+  assert.equal(style(totalRow, 3, 30_253_070_560), "totalBytes");
+  assert.equal(style(totalRow, 4, 28.18), "totalDecimal");
+  assert.equal(style(fullRow, 2, 641_367_461_632), "totalBytes");
+  assert.equal(style(fullRow, 3, "全模型 GiB"), "totalLabel");
+
+  const section = rowIndex(rows, "基础信息");
+  assert.equal(style(section, 0, "基础信息"), "section");
+  assert.equal(style(section, 4, ""), "section");
+  assert.equal(style(section + 1, 0, "导出时间"), "label");
+  assert.equal(style(section + 1, 1, "2026-11-05 15:20:00"), "value");
+  assert.equal(style(section + 1, 4, ""), "value", "空位留白用值样式");
+  assert.equal(style(rows.indexOf(rows.find((r) => r[0] === "ModelScope")), 2, ""), "value");
+});
+
 test("文件名包含 owner、权重名与时间戳，并去掉非法字符", () => {
   const date = new Date("2026-11-05T12:30:00");
   assert.equal(

@@ -5,7 +5,7 @@
 import type { ModelStructure } from "./config-model";
 import type { KvCacheBreakdown, KvCacheModelInfo, CachePrecision } from "./kv-cache-model";
 import type { WeightCategoryRow } from "./weight-calc";
-import type { Cell, SheetSpec } from "./xlsx";
+import type { Cell, CellStyle, SheetSpec } from "./xlsx";
 
 const GIB = 1024 ** 3;
 
@@ -137,18 +137,27 @@ function pairRows(groups: [string, Cell][][]): Cell[][] {
   });
 }
 
-function mainTableRows(categories: WeightCategoryRow[]): Cell[][] {
-  const rows: Cell[][] = [["权重（张量）类别", "切分方式", "全模型 bytes", "单卡 bytes", "单卡 GiB"]];
-  const sorted = [...categories].sort((a, b) => b.perDevice - a.perDevice);
-  for (const row of sorted) {
-    rows.push([row.label, splitLabel(row), row.full, Math.round(row.perDevice), gib(row.perDevice)]);
+type RowKind = "header" | "category" | "total" | "full" | "blank" | "section" | "meta";
+
+function styleFor(kind: RowKind, columnIndex: number, value: Cell): CellStyle {
+  switch (kind) {
+    case "header":
+      return "header";
+    case "section":
+      return "section";
+    case "category":
+      return columnIndex >= 4 ? "decimal" : columnIndex >= 2 ? "bytes" : "value";
+    case "total":
+      return columnIndex === 3 ? "totalBytes" : columnIndex === 4 ? "totalDecimal" : "totalLabel";
+    case "full":
+      return columnIndex === 2 ? "totalBytes" : columnIndex === 4 ? "totalDecimal" : "totalLabel";
+    case "meta":
+      // 空位留白，保证一行里「键名底色 + 值白底」交替时右侧不会出现灰色空块。
+      if (value === "" || value === null || value === undefined) return "value";
+      return columnIndex % 2 === 0 ? "label" : "value";
+    default:
+      return "default";
   }
-  const fullTotal = sorted.reduce((sum, row) => sum + row.full, 0);
-  const perTotal = sorted.reduce((sum, row) => sum + row.perDevice, 0);
-  rows.push(["合计（单卡权重）", "—", "", Math.round(perTotal), gib(perTotal)]);
-  // 末行把「全模型 bytes / 全模型 GiB」两组标签-数值横向铺在 5 列里，不额外占列。
-  rows.push(["全模型权重合计", "全模型 bytes", fullTotal, "全模型 GiB", gib(fullTotal)]);
-  return rows;
 }
 
 function metaRows(ctx: ExportContext, tensors: number): Cell[][] {
@@ -229,17 +238,35 @@ function metaRows(ctx: ExportContext, tensors: number): Cell[][] {
  */
 export function buildExportSheet(ctx: ExportContext): SheetSpec {
   const categories = ctx.result.weightResult?.categories ?? [];
-  const rows = mainTableRows(categories);
+  const sorted = [...categories].sort((a, b) => b.perDevice - a.perDevice);
+  const rows: Cell[][] = [];
+  const kinds: RowKind[] = [];
+  const push = (row: Cell[], kind: RowKind) => {
+    rows.push(row);
+    kinds.push(kind);
+  };
+
+  push(["权重（张量）类别", "切分方式", "全模型 bytes", "单卡 bytes", "单卡 GiB"], "header");
+  for (const row of sorted) {
+    push([row.label, splitLabel(row), row.full, Math.round(row.perDevice), gib(row.perDevice)], "category");
+  }
+  const fullTotal = sorted.reduce((sum, row) => sum + row.full, 0);
+  const perTotal = sorted.reduce((sum, row) => sum + row.perDevice, 0);
+  push(["合计（单卡权重）", "—", "", Math.round(perTotal), gib(perTotal)], "total");
+  // 末行把「全模型 bytes / 全模型 GiB」两组标签-数值横向铺在 5 列里，不额外占列。
+  push(["全模型权重合计", "全模型 bytes", fullTotal, "全模型 GiB", gib(fullTotal)], "full");
+
+  push([], "blank");
+  push([], "blank");
+  push(["基础信息", "", "", "", ""], "section");
   const tensors = categories.reduce((sum, row) => sum + row.tensors, 0);
-  rows.push([], []);
-  const sectionRow = rows.length;
-  rows.push(["基础信息", "", "", "", ""]);
-  rows.push(...metaRows(ctx, tensors));
+  for (const row of metaRows(ctx, tensors)) push(row, "meta");
+
   return {
     name: EXPORT_SHEET_NAME,
     columnWidths: [30, 24, 20, 20, 14],
     rows,
-    boldRows: [sectionRow],
+    cellStyle: (rowIndex, columnIndex, value) => styleFor(kinds[rowIndex] ?? "blank", columnIndex, value),
   };
 }
 
