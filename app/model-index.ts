@@ -177,6 +177,8 @@ export const KV_MODEL_ID: Record<string, string> = {
   "Qwen3.5-27B": "qwen3.5-27b",
   "Qwen3.6-27B": "qwen3.6-27b",
   "Qwen3.6-35B-A3B": "qwen3.6-35b-a3b",
+  // Step 5 Preview：Sparse GQA + 8-token 块压缩索引器（上游数据见 kv-cache-calculator）。
+  "Step-5-Preview": "step-5-preview",
 };
 
 /** 由原始权重名取 KV Cache 模型 id；无公式时返回 undefined。 */

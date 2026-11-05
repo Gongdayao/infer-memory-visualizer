@@ -3,7 +3,16 @@ declare module "kv-cache-calculator" {
     role: string;
     label: string;
     elements?: number;
+    /** 该缓存组的总字节数（全部卡、全部序列）。 */
     bytes: number;
+    /** 分摊到每张卡后的字节数（已乘上序列数）。 */
+    perDeviceBytes: number;
+    /** 全部卡合计的物理占用。 */
+    allDeviceBytes: number;
+    heads: number;
+    localHeads: number;
+    replicated: boolean;
+    replicationFactor: number;
   };
 
   export type UpstreamCalculateResult = {

@@ -29,7 +29,7 @@
 - 提供浅色/深色界面和响应式布局。
 
 > [!NOTE]
-> 权重显存对清单内所有权重均支持（逐张量精确）；KV Cache 与 Index Cache 仅对上游 `kv-cache-calculator` 已收录的模型（MiniMax M3/M2.7、DeepSeek V3/V3.2/V4、GLM-5/5.1/5.2、Kimi K2.5/K2.6、Qwen3 系列等）展示，其余模型暂不支持。
+> 权重显存对清单内所有权重均支持（逐张量精确）；KV Cache 与 Index Cache 仅对上游 `kv-cache-calculator` 已收录的模型（MiniMax M3/M2.7、DeepSeek V3/V3.2/V4、GLM-5/5.1/5.2、Kimi K2.5/K2.6、Qwen3 系列、Step-5-Preview 等）展示，其余模型暂不支持。
 
 ## 核心原理
 
