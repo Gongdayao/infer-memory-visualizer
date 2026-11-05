@@ -16,6 +16,7 @@
 2. **二级选择权重**：列出该厂商下的**原始权重**（`deepseek-ai/DeepSeek-V3.1`）及其 **Eco-Tech 量化权重**（`Eco-Tech/DeepSeek-V3.1-w4a8-mtp-QuaRot`），原始权重按字母序、量化权重紧跟在所属原始权重之下按字母序排列。
 3. 选中后页面自动拉取该权重的 `config.json`（结构参数）与全部 `safetensors` 分片头部（逐张量 `dtype × shape`），加载期间按「已接收分片数 / 总分片数」显示进度条，完成后计算单卡权重占用。
 4. 配置 DP / TP / EP 及高级切分（Attention、O-Proj、Embedding、LM Head、Shared Expert 的独立 TP），设置 batch、KV Cache 精度与运行时开销，实时查看各部分占比与总显存。
+5. 需要留档时点右上角的 **导出 Excel**：把当前选中权重的权重切分与显存明细导出为单个 `.xlsx`（未选择权重时按钮为禁用态）。
 
 ## 功能
 
@@ -26,6 +27,8 @@
 - 支持 `w*a*` 量化权重（含 INT8/INT4 及 `mxfp8`/`mxfp4` 的 payload + scale）与原始 BF16/FP8 权重。
 - 估算激活值、HCCL buffer、ACLGraph、CANN/PTA/算子与 Device OS 开销。
 - 对 `kv-cache-calculator` 已收录的模型，独立配置 KV Cache 与 Index Cache 的上下文长度、序列数和精度。
+- 一键导出 Excel：单张工作表按「权重（张量）类别 × 切分方式（TP / EP / 复本）」汇总全模型与单卡占用，末尾给出单卡与全模型合计，下方附结构、并行配置与显存构成等基础信息。
+- 支持 Step-5 家族（当前为 `Step-5-Preview` 及其 Eco-Tech 量化权重 `Step-5-Preview-w8a8-mxfp8`；正式版 Step-5 发布后作为同级原始权重追加）。
 - 提供浅色/深色界面和响应式布局。
 
 > [!NOTE]
@@ -59,6 +62,8 @@
 - Dense MLP `÷ TP`，Embedding / LM Head `÷ embeddingTp / lmHeadTp`；
 - Shared Expert、Router、Norm、视觉塔等复制（`÷ 1`）。
 
+不同架构的命名差异在 `classifyTensor` 里统一处理，例如 Step 系列把路由专家的三个矩阵合并在 `moe.*_proj`（形状含专家维，命名中没有 `expert` 字样）、共享专家写作 `share_expert`、MTP 输出头挂在 `shared_head.output`，这些都会分别归入路由专家、共享专家与 LM Head。
+
 ### 权重清单来源
 
 量化权重清单来自 ModelScope 上的 Eco-Tech 仓库，经过选型过滤后静态维护在 [`app/model-index.ts`](./app/model-index.ts) 中：只保留 `w*a*` 量化，并排除 `xllm`、`mindie`、`310`、`eagle`、`pdmix`/`nopdmix`、`LAOS` 等非通用或硬件专属版本。原始权重的 owner 通过厂商前缀映射（如 `DeepSeek-*`、`GLM-*`、`Ling-*`/`Ring-*`）。
@@ -71,7 +76,8 @@
 
 ### 其余开销
 
-- KV Cache 基算复用 [`kv-cache-calculator`](https://github.com/Eco-Sphere/kv-cache-calculator)。
+- KV Cache 基算复用 [`kv-cache-calculator`](https://github.com/Eco-Sphere/kv-cache-calculator)。其网页版的单卡分摊按缓存组头数进行（KV 组按 KV 头数切分，头数少于 TP 时在卡间重复；索引器只有单个 K 头，因此每卡保留完整副本），本仓库直接复用该结果。
+- Step-5 的索引器缓存按 **每 8 个 token 压缩成一个 FP8 摘要**（`index_head_dim = 256`，单头），其模型数据与公式仍在等待上游合并，故本分支的 `package.json` 临时指向 `github:Gongdayao/kv-cache-calculator#fa3e3e3`；上游发版后改回 `Eco-Sphere` 的 tag 即可，本仓库代码无需调整。
 - 激活值与 HCCL buffer 根据 token 数、并行规模、专家数量和最大 batch size 估算。
 - ACLGraph、CANN 及算子开销允许手动配置；Device OS 当前按固定值（4.25 GiB）计入。
 
@@ -119,6 +125,8 @@ node --test tests/weight-calc.test.mjs      # 张量分类与权重切分
 node --test tests/config-model.test.mjs     # config.json 结构参数提取
 node --test tests/model-index.test.mjs      # 模型清单数据完整性
 node --test tests/kv-cache-model.test.mjs   # KV Cache 计算适配
+node --test tests/xlsx.test.mjs             # Excel 生成器（ZIP + OOXML 结构）
+node --test tests/export-excel.test.mjs     # 导出表内容与样式分配
 ```
 
 ## 项目结构
@@ -132,6 +140,8 @@ app/
 ├── weight-calc.ts       # 张量归类与权重（全量/单卡）计算
 ├── config-model.ts      # config.json → 统一结构参数
 ├── kv-cache-model.ts    # KV/Index Cache 计算适配
+├── xlsx.ts              # 零依赖 .xlsx 生成器（ZIP + OOXML + 样式）
+├── export-excel.ts      # 导出表内容组织（类别汇总、合计、基础信息）
 └── globals.css          # 全局样式
 tests/                   # 计算逻辑与渲染测试
 docs/
@@ -146,6 +156,7 @@ worker/                  # Cloudflare Worker 入口
 - 权重显存以 safetensors header 为权威来源，全量值精确；单卡切分为通用近似，详见上文「核心原理」。
 - 模型权重清单（厂商/owner/量化变体）静态维护在 [`app/model-index.ts`](./app/model-index.ts)，新增权重需同步补充过滤规则与回归测试。
 - 旧版手写的 MiniMax 权重公式已归档至 [`docs/legacy-minimax-weight-formula.md`](./docs/legacy-minimax-weight-formula.md)，仅作数据逻辑与计算公式参考。
+- 导出的 Excel 与界面同源：类别汇总的「单卡 bytes」合计恒等于界面「单卡权重」，已在 `tests/weight-calc.test.mjs`（类别合计 = 模块级单卡权重）与 `tests/export-excel.test.mjs`（表内合计行）中断言。
 
 如果你发现模型参数、计算假设或结果存在问题，欢迎提交 [Issue](https://github.com/Eco-Sphere/infer-memory-visualizer/issues)。请附上输入配置、预期结果、实际结果和可验证的数据来源。
 
