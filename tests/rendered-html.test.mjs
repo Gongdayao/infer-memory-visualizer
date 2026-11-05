@@ -36,6 +36,10 @@ test("server-renders the inference memory planner shell", async () => {
   assert.match(html, /CANN \+ PTA \+ 算子/);
   assert.match(html, /Device OS/);
   assert.match(html, /我要贡献/);
+  // 右上角导出按钮：未选权重时禁用（SSR 初始态）
+  assert.match(html, /<button class="top-link export-button" type="button" disabled=""/);
+  assert.match(html, /导出 Excel/);
+  assert.match(html, /请先选择权重后再导出/);
   assert.match(html, /infer-memory-visualizer\/blob\/main\/CONTRIBUTING\.md/);
   assert.match(html, /<strong>\d+\.\d{2}<\/strong><span>GiB<\/span>/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);

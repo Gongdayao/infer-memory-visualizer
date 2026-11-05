@@ -5,6 +5,8 @@ import { MODEL_INDEX, QUANT_OWNER, kvCacheModelIdOf, type Vendor } from "./model
 import { CACHE_PRECISIONS, calculateKvCache, getKvCacheModelInfo, type CachePrecision } from "./kv-cache-model";
 import { fetchModelWeightData, type ModelWeightData, type WeightLoadProgress } from "./modelscope";
 import { calculateWeightFromTensors, type TensorModule } from "./weight-calc";
+import { buildExportSheets, exportFileName } from "./export-excel";
+import { downloadXlsx } from "./xlsx";
 
 type Inputs = {
   maxBatchedTokens: number;
@@ -292,6 +294,21 @@ export default function Home() {
     setInputs(DEFAULTS);
   };
 
+  // 导出当前权重的显存明细；未选择权重时不触发。
+  const exportExcel = () => {
+    if (!weight || !struct || !result.weightResult) return;
+    const exportWeight = { owner: weight.owner, name: weight.name, kind: weight.kind, rawName: weight.rawName };
+    const sheets = buildExportSheets({
+      weight: exportWeight,
+      struct,
+      inputs,
+      result,
+      epSize,
+      kvCacheModelId,
+    });
+    downloadXlsx(sheets, exportFileName(exportWeight));
+  };
+
   const categories = [
     ...(weightResult ? [{ label: "权重占用", value: result.weight, color: "var(--rose)", display: formatGiB(result.weight) }] : []),
     ...(kvCacheModelId ? [{ label: "KV + Index Cache", value: result.kvCache, color: "var(--cyan)", display: formatGiB(result.kvCache) }] : []),
@@ -340,6 +357,21 @@ export default function Home() {
               </svg>
               我要贡献
             </a>
+            <button
+              className="top-link export-button"
+              type="button"
+              onClick={exportExcel}
+              disabled={!weight}
+              title={weight ? "导出当前权重的显存明细到 Excel" : "请先选择权重后再导出"}
+              aria-label="导出当前权重的显存明细到 Excel"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M4 21h16" />
+              </svg>
+              导出 Excel
+            </button>
             <button className="theme-toggle" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换到浅色模式" : "切换到深色模式"}>
               <span>{dark ? "☀" : "☾"}</span>{dark ? "浅色" : "深色"}
             </button>
