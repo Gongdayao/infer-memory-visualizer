@@ -235,7 +235,18 @@ export function fetchModelWeightData(
       onProgress?.({ phase: "shards", done, total: shards.length });
       return header;
     });
-    const tensors = headers.flatMap((header) => header.tensors);
+    // 同一张量可能同时出现在多个分片上（例如 Step-5-Preview 的 MTP 分片与主分片
+    // 都含有 layer 92 的权重、embedding 在首尾分片各存一份），按名字去重后再求和，
+    // 避免权重字节数被重复计入。
+    const seen = new Set<string>();
+    const tensors: SafetensorInfo[] = [];
+    for (const header of headers) {
+      for (const tensor of header.tensors) {
+        if (seen.has(tensor.name)) continue;
+        seen.add(tensor.name);
+        tensors.push(tensor);
+      }
+    }
     return { struct, tensors, shardCount: shards.length, optionalShards } satisfies ModelWeightData;
   })();
 

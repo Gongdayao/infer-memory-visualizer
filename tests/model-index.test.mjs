@@ -70,3 +70,15 @@ test("量化权重统一 owner 为 Eco-Tech", () => {
   assert.ok(allQuant.length > 0);
   assert.equal(QUANT_OWNER, "Eco-Tech");
 });
+
+test("Step 厂商收录 Step-5 家族（Step-5-Preview 及其 Eco-Tech 量化）", () => {
+  const step = MODEL_INDEX.find((v) => v.brand === "Step");
+  assert.ok(step, "应存在 Step 厂商");
+  assert.equal(step.owner, "stepfun-ai");
+  const preview = step.models.find((m) => m.name === "Step-5-Preview");
+  assert.ok(preview, "应收录 Step-5-Preview");
+  assert.deepEqual(preview.quantized, ["Step-5-Preview-w8a8-mxfp8"]);
+  // 二级菜单按字母序：Step-3.5-Flash < Step-3.7-Flash < Step-5-Preview
+  const names = step.models.map((m) => m.name);
+  assert.deepEqual([...names].sort(), names);
+});

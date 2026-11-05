@@ -138,6 +138,8 @@ export const MODEL_INDEX: Vendor[] = [
     models: [
       { name: "Step-3.5-Flash", quantized: ["Step-3.5-Flash-w8a8-mtp"] },
       { name: "Step-3.7-Flash", quantized: ["Step-3.7-Flash-w8a8-mtp"] },
+      // Step-5 家族：当前仅 Step-5-Preview 开放权重；正式版 Step-5 发布后作为同级原始权重追加。
+      { name: "Step-5-Preview", quantized: ["Step-5-Preview-w8a8-mxfp8"] },
     ],
   },
 ];

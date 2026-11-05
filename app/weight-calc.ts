@@ -46,8 +46,10 @@ export type WeightResult = {
 
 const VISION = ["vision", "visual", "projector", "patch_merge", "vae", "vision_model"];
 const EMBEDDING = ["embed_tokens", "word_embedding", "wte."];
-const LM_HEAD = ["lm_head", "final_fc", "score_head"];
-const SHARED_EXPERT = ["shared_expert", "shared_experts"];
+// shared_head.output 是 MTP 投机层的输出头（词表 × hidden），切分行为与 LM Head 一致。
+const LM_HEAD = ["lm_head", "final_fc", "score_head", "shared_head.output"];
+// Step 系列把共享专家写作 share_expert（无 d），需与 shared_experts 同时覆盖。
+const SHARED_EXPERT = ["shared_expert", "shared_experts", "share_expert"];
 const ROUTER = ["router", "e_score", "tid2eid", ".gate.weight", ".gate.bias"];
 const NORM = [
   "layernorm", "rmsnorm", "norm.weight", "norm.", "norm1", "norm2", "q_norm",
@@ -64,9 +66,18 @@ const DENSE_MLP = [
 ];
 const OPROJ = ["o_proj", "out_proj", "wo_a", "wo_b"];
 
+// Step 系列把路由专家的三个 MLP 矩阵合并在 moe.*_proj 下（形状含专家维），
+// 命名里没有 expert 字样，因此显式按「.moe. + MLP 矩阵」判定为路由专家权重。
+const MOE_EXPERT_MATRIX = ["gate_proj", "up_proj", "down_proj", "weight_scale", "weight_scale_inv"];
+
 function includes(name: string, words: string[]): boolean {
   const n = name.toLowerCase();
   return words.some((w) => n.includes(w));
+}
+
+function isMoERoutedExpert(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.includes(".moe.") && MOE_EXPERT_MATRIX.some((w) => n.includes(w));
 }
 
 /** 将张量名归类到模块类型。量化辅助张量（weight_scale 等）跟随主权重归类。 */
@@ -77,6 +88,7 @@ export function classifyTensor(name: string): TensorModule {
   if (includes(name, SHARED_EXPERT)) return "shared_expert";
   if (name.toLowerCase().includes("expert")) return "routed_expert";
   if (includes(name, ROUTER)) return "router";
+  if (isMoERoutedExpert(name)) return "routed_expert";
   if (includes(name, NORM)) return "norm";
   if (includes(name, ATTENTION)) return "attention";
   if (includes(name, DENSE_MLP)) return "dense_mlp";

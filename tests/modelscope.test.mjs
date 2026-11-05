@@ -132,3 +132,31 @@ function mountFetchExtra(optionalHeader) {
   });
   return () => { globalThis.fetch = original; };
 }
+
+test("同名张量跨分片重复出现时只计一次", async () => {
+  // Step-5-Preview 的 MTP 分片与主分片都存有 layer 92 的权重，需去重后求和。
+  const dup = { "dup.weight": { dtype: "BF16", shape: [64, 64], data_offsets: [0, 8192] } };
+  const headerA = makeHeaderFile({ ...dup, "a.weight": { dtype: "BF16", shape: [64, 64], data_offsets: [0, 8192] } });
+  const headerB = makeHeaderFile({ ...dup, "b.weight": { dtype: "BF16", shape: [64, 64], data_offsets: [0, 8192] } });
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const u = String(input);
+    if (u.includes("config.json")) return new Response(JSON.stringify(CONFIG), { status: 200, headers: { "content-type": "application/json" } });
+    if (u.includes("safetensors.index.json")) return new Response(JSON.stringify({ weight_map: { "a.weight": "a.safetensors", "b.weight": "b.safetensors" } }), { status: 200 });
+    if (u.includes("optional/quarot.safetensors")) return new Response("not found", { status: 404 });
+    if (u.includes("quarot.safetensors")) return new Response("not found", { status: 404 });
+    if (u.includes("a.safetensors")) return new Response(headerA, { status: 206 });
+    if (u.includes("b.safetensors")) return new Response(headerB, { status: 206 });
+    return new Response("not found", { status: 404 });
+  });
+  try {
+    const data = await fetchModelWeightData("TestOwner", "DupModel");
+    const names = data.tensors.map((t) => t.name);
+    assert.equal(names.filter((n) => n === "dup.weight").length, 1, "重复张量只应保留一份");
+    assert.equal(data.tensors.length, 3);
+    const total = data.tensors.reduce((s, t) => s + t.bytes, 0);
+    assert.equal(total, 8192 * 3);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

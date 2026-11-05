@@ -22,6 +22,29 @@ test("classifyTensor 覆盖各模块命名", () => {
   assert.equal(classifyTensor("model.layers.0.mlp.shared_experts.gate_proj.weight"), "shared_expert");
 });
 
+test("classifyTensor 覆盖 Step 系列（moe.*_proj 路由专家 / share_expert / MTP 头）", () => {
+  // 路由专家矩阵合并在 moe.*_proj 下，命名没有 expert 字样，必须按 .moe. 判定。
+  assert.equal(classifyTensor("model.layers.3.moe.gate_proj.weight"), "routed_expert");
+  assert.equal(classifyTensor("model.layers.3.moe.up_proj.weight"), "routed_expert");
+  assert.equal(classifyTensor("model.layers.3.moe.down_proj.weight"), "routed_expert");
+  assert.equal(classifyTensor("model.layers.3.moe.gate_proj.weight_scale"), "routed_expert");
+  assert.equal(classifyTensor("model.layers.3.moe.gate_proj.weight_scale_inv"), "routed_expert");
+  // 路由 gate 与 router bias 仍归 router，不能被上面的规则吞掉。
+  assert.equal(classifyTensor("model.layers.3.moe.gate.weight"), "router");
+  assert.equal(classifyTensor("model.layers.3.moe.router_bias"), "router");
+  // 共享专家写作 share_expert（无 d）。
+  assert.equal(classifyTensor("model.layers.3.share_expert.gate_proj.weight"), "shared_expert");
+  assert.equal(classifyTensor("model.layers.3.share_expert.down_proj.weight"), "shared_expert");
+  // MTP 投机层：输出头按 LM Head 切分，norm 仍归 norm，eh_proj 保持 other（复制）。
+  assert.equal(classifyTensor("model.layers.92.transformer.shared_head.output.weight"), "lm_head");
+  assert.equal(classifyTensor("model.layers.92.transformer.shared_head.norm.weight"), "norm");
+  assert.equal(classifyTensor("model.layers.92.eh_proj.weight"), "other");
+  // 普通 dense MLP 与注意力门控保持原归类。
+  assert.equal(classifyTensor("model.layers.0.mlp.gate_proj.weight"), "dense_mlp");
+  assert.equal(classifyTensor("model.layers.0.self_attn.g_proj.weight"), "attention");
+  assert.equal(classifyTensor("model.layers.3.self_attn.sparse_indexer_q.weight"), "attention");
+});
+
 test("calculateWeightFromTensors 全量精确求和且单卡按模块切分", () => {
   const tensors = [
     { name: "model.embed_tokens.weight", dtype: "BF16", shape: [100, 64], bytes: 12800 },
