@@ -154,7 +154,7 @@ worker/                  # Cloudflare Worker 入口
 
 - 结构参数与权重张量**动态来自 ModelScope** 的 `config.json` 与 `safetensors` header，不在代码中写死模型参数。
 - 权重显存以 safetensors header 为权威来源，全量值精确；单卡切分为通用近似，详见上文「核心原理」。
-- 模型权重清单（厂商/owner/量化变体）静态维护在 [`app/model-index.ts`](./app/model-index.ts)，新增权重需同步补充过滤规则与回归测试。
+- 模型权重清单（厂商/owner/量化变体）静态维护在 [`app/model-index.ts`](./app/model-index.ts)，**只收录可匿名访问的公开权重**（网页端需直接拉取，私有或需审批的仓库不在范围内）；新增权重需同步补充过滤规则与回归测试。
 - 旧版手写的 MiniMax 权重公式已归档至 [`docs/legacy-minimax-weight-formula.md`](./docs/legacy-minimax-weight-formula.md)，仅作数据逻辑与计算公式参考。
 - 导出的 Excel 与界面同源：类别汇总的「单卡 bytes」合计恒等于界面「单卡权重」，已在 `tests/weight-calc.test.mjs`（类别合计 = 模块级单卡权重）与 `tests/export-excel.test.mjs`（表内合计行）中断言。
 
