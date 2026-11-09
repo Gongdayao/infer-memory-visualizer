@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
-    "kv-cache-calculator": "github:Gongdayao/kv-cache-calculator#fa3e3e3",
+    "kv-cache-calculator": "github:Gongdayao/kv-cache-calculator#cb4b635",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"

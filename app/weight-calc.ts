@@ -79,9 +79,12 @@ export type WeightResult = {
 };
 
 const VISION = ["vision", "visual", "projector", "patch_merge", "vae", "vision_model"];
-const EMBEDDING = ["embed_tokens", "word_embedding", "wte."];
+// ple_embedding / ngram_embedding 是 Qwen3.8-Flash-Next 这类模型的超大查表嵌入（PLE），
+// 按词表并行处理（÷ embeddingTp），否则会被当成复本而严重高估单卡占用。
+const EMBEDDING = ["embed_tokens", "word_embedding", "wte.", "ple_embedding", "ngram_embedding"];
 // shared_head.output 是 MTP 投机层的输出头（词表 × hidden），切分行为与 LM Head 一致。
-const LM_HEAD = ["lm_head", "final_fc", "score_head", "shared_head.output"];
+// shared_head.output（Step）与 shared_head.head（GLM）都是 MTP 投机层的输出头，与 LM Head 同切分。
+const LM_HEAD = ["lm_head", "final_fc", "score_head", "shared_head.output", "shared_head.head"];
 // Step 系列把共享专家写作 share_expert（无 d），需与 shared_experts 同时覆盖。
 const SHARED_EXPERT = ["shared_expert", "shared_experts", "share_expert"];
 const ROUTER = ["router", "e_score", "tid2eid", ".gate.weight", ".gate.bias"];

@@ -62,7 +62,13 @@ test("KV_MODEL_ID 映射键均存在于某些厂商的原始权重中", () => {
     assert.ok(allRaw.has(raw), `KV 映射键 ${raw} 应存在于原始权重清单`);
   }
   assert.equal(kvCacheModelIdOf("MiniMax-M3"), "minimax-m3");
-  assert.equal(kvCacheModelIdOf("Step-3.5-Flash"), undefined);
+  // Step 家族已接入上游 KV 数据
+  assert.equal(kvCacheModelIdOf("Step-3.5-Flash"), "step-3.5-flash");
+  assert.equal(kvCacheModelIdOf("Step-3.7-Flash"), "step-3.7-flash");
+  assert.equal(kvCacheModelIdOf("Step-5-Preview"), "step-5-preview");
+  // 上游尚未收录的模型保持无 KV 公式
+  assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash"), undefined);
+  assert.equal(kvCacheModelIdOf("Kimi-K3.1-Pro"), undefined);
 });
 
 test("量化权重统一 owner 为 Eco-Tech", () => {

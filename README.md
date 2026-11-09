@@ -20,7 +20,7 @@
 
 ## 功能
 
-- 按「厂商 → 原始权重 / 量化权重」两级选择，覆盖 DeepSeek、GLM、Qwen、Kimi、MiniMax、Step、Ling、Ring、Hunyuan、InternVL 等厂商。
+- 按「厂商 → 原始权重 / 量化权重」两级选择，覆盖 DeepSeek、GLM、Gemma、Qwen、Kimi、MiniMax、Step、Ling、Ring、Hunyuan、InternVL 等厂商。
 - 动态从 ModelScope 拉取结构参数与权重张量清单，无需内置写死的模型参数。
 - 逐张量计算权重显存（全量精确），并按模块通用切分估算单卡权重。
 - 已拉取的权重清单在会话内缓存：切换权重（含切回看过的权重）复用缓存，调整 DP/TP 等并行参数只重算切分、不重复请求；分片 header 并发拉取，并按「已接收分片数 / 总分片数」实时上报进度条。
