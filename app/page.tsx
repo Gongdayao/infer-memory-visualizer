@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { MODEL_INDEX, QUANT_OWNER, kvCacheModelIdOf, type Vendor } from "./model-index";
-import { CACHE_PRECISIONS, calculateKvCache, getKvCacheModelInfo, type CachePrecision } from "./kv-cache-model";
+import { CACHE_PRECISIONS, cachePrecisionOptions, calculateKvCache, describeCacheFamily, getKvCacheModelInfo, type CachePrecision } from "./kv-cache-model";
 import { fetchModelWeightData, type ModelWeightData, type WeightLoadProgress } from "./modelscope";
 import { calculateWeightFromTensors, type TensorModule } from "./weight-calc";
 import { buildExportSheet, exportFileName } from "./export-excel";
@@ -212,11 +212,46 @@ export default function Home() {
   }, [modelData, inputs.tpSize, inputs.dpSize, inputs.attentionTpSize, inputs.oprojTpSize, inputs.embeddingTpSize, inputs.lmHeadTpSize, inputs.sharedExpertTpSize]);
 
   const kvCacheModelId = weight ? kvCacheModelIdOf(weight.rawName) : undefined;
+  // 精度档位由"权重形态 + 权重名里的 c 位 + 模型族"决定；不受支持的档位不渲染。
+  const kvPrecisionSpec = kvCacheModelId && weight
+    ? cachePrecisionOptions(weight.name, kvCacheModelId, "kv")
+    : { options: [], defaultValue: DEFAULTS.kvPrecision as CachePrecision };
+  const indexPrecisionSpec = kvCacheModelId && weight
+    ? cachePrecisionOptions(weight.name, kvCacheModelId, "index")
+    : { options: [], defaultValue: DEFAULTS.indexCachePrecision as CachePrecision };
+  const kvPrecisionOptions = kvPrecisionSpec.options;
+  const indexPrecisionOptions = indexPrecisionSpec.options;
+  const kvPrecisionValue = kvPrecisionOptions.includes((inputs.kvPrecision ?? DEFAULTS.kvPrecision) as CachePrecision)
+    ? (inputs.kvPrecision as CachePrecision)
+    : kvPrecisionSpec.defaultValue;
+  const indexPrecisionValue = indexPrecisionOptions.includes((inputs.indexCachePrecision ?? DEFAULTS.indexCachePrecision) as CachePrecision)
+    ? (inputs.indexCachePrecision as CachePrecision)
+    : indexPrecisionSpec.defaultValue;
+
+  // 切换权重时按"权重名 + 模型族"重新预选缓存精度（c8 → 8bit、无 c → BF16）。
+  useEffect(() => {
+    if (!weight || !kvCacheModelId) return;
+    const kvSpec = cachePrecisionOptions(weight.name, kvCacheModelId, "kv");
+    const idxSpec = cachePrecisionOptions(weight.name, kvCacheModelId, "index");
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setInputs((current) => ({
+      ...current,
+      kvPrecision: kvSpec.defaultValue,
+      indexCachePrecision: idxSpec.options.length > 0 ? idxSpec.defaultValue : current.indexCachePrecision,
+    }));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [weight, kvCacheModelId]);
   const epSize = Math.max(1, Math.floor(safe(inputs.tpSize, 1)) * Math.floor(safe(inputs.dpSize, 1)));
 
   const result = useMemo(() => {
     // 仅在「已选权重 且 权重数据已加载」后显示非零占用；加载期间保持全 0，避免预填充。
     const active = weightKey && struct ? 1 : 0;
+    // 精度档位由权重自身推导（c8 → 8bit、mxfp → A5 形态），不受支持的档位回落到默认值。
+    const weightName = weightKey ? weightKey.slice(weightKey.indexOf("/") + 1) : "";
+    const kvSpec = weightName && kvCacheModelId ? cachePrecisionOptions(weightName, kvCacheModelId, "kv") : null;
+    const idxSpec = weightName && kvCacheModelId ? cachePrecisionOptions(weightName, kvCacheModelId, "index") : null;
+    const kvPrecision = kvSpec && kvSpec.options.includes(inputs.kvPrecision) ? inputs.kvPrecision : (kvSpec?.defaultValue ?? inputs.kvPrecision);
+    const indexPrecision = idxSpec && idxSpec.options.includes(inputs.indexCachePrecision) ? inputs.indexCachePrecision : (idxSpec?.defaultValue ?? inputs.indexCachePrecision);
     const H = struct?.hiddenSize ?? 0;
     const T = safe(inputs.maxBatchedTokens);
     const dp = Math.max(1, safe(inputs.dpSize, 1));
@@ -251,8 +286,8 @@ export default function Home() {
       modelId: kvCacheModelId,
       tokens: safe(inputs.kvCacheTokens, DEFAULTS.kvCacheTokens),
       sequences: safe(inputs.kvCacheSequences, DEFAULTS.kvCacheSequences),
-      kvPrecision: inputs.kvPrecision ?? DEFAULTS.kvPrecision,
-      indexPrecision: inputs.indexCachePrecision ?? DEFAULTS.indexCachePrecision,
+      kvPrecision,
+      indexPrecision,
       mtpLayers: Math.floor(safe(inputs.mtpLayers)),
       tpSize: attentionTp,
     }) ?? null : null;
@@ -280,6 +315,9 @@ export default function Home() {
       kvCacheBreakdown, kvCacheInfo, weightResult,
       total: active * total, localExperts,
     };
+  // 精度档位从 weightKey/kvCacheModelId 派生，不额外引入依赖；React Compiler 无法证明
+  // weightResult 不会被后续读取路径修改，这里显式豁免该 memo 保留检查。
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   }, [inputs, epSize, struct, weightResult, kvCacheModelId, weightKey]);
 
   const update = (key: keyof Inputs, value: string) => {
@@ -432,10 +470,25 @@ export default function Home() {
                   <NumberField label="Concurrent sequences" value={inputs.kvCacheSequences ?? DEFAULTS.kvCacheSequences} onChange={(v) => update("kvCacheSequences", v)} />
                 </div>
                 <div className="field-grid cache-precision-fields">
-                  <SelectField label="KV precision" value={inputs.kvPrecision ?? DEFAULTS.kvPrecision} onChange={(value) => setInputs((current) => ({ ...current, kvPrecision: value as CachePrecision }))} options={Object.entries(CACHE_PRECISIONS).map(([value, item]) => ({ value, label: item.label }))} />
-                  <SelectField label="Index precision" value={inputs.indexCachePrecision ?? DEFAULTS.indexCachePrecision} onChange={(value) => setInputs((current) => ({ ...current, indexCachePrecision: value as CachePrecision }))} options={Object.entries(CACHE_PRECISIONS).map(([value, item]) => ({ value, label: item.label }))} />
+                  <SelectField
+                    label="KV precision"
+                    value={kvPrecisionValue}
+                    onChange={(value) => setInputs((current) => ({ ...current, kvPrecision: value as CachePrecision }))}
+                    options={kvPrecisionOptions.map((value) => ({ value, label: CACHE_PRECISIONS[value].label }))}
+                  />
+                  {indexPrecisionOptions.length > 0 && (
+                    <SelectField
+                      label="Index precision"
+                      value={indexPrecisionValue}
+                      onChange={(value) => setInputs((current) => ({ ...current, indexCachePrecision: value as CachePrecision }))}
+                      options={indexPrecisionOptions.map((value) => ({ value, label: CACHE_PRECISIONS[value].label }))}
+                    />
+                  )}
                 </div>
-                <p className="field-note">基于上游 kv-cache-calculator 的 {kvCacheModelId} 结构参数。</p>
+                <p className="field-note">
+                  基于上游 kv-cache-calculator 的 {kvCacheModelId} 结构参数。
+                  {weight && describeCacheFamily(weight.name) ? ` ${describeCacheFamily(weight.name)}` : ""}
+                </p>
               </fieldset>
             )}
 
@@ -582,7 +635,7 @@ export default function Home() {
                 {result.kvCacheInfo && result.kvCacheBreakdown && (
                   <DetailSection title="KV + Index Cache" value={result.kvCache} tone="cyan">
                     <DetailRow
-                      label={`K/V Cache（${CACHE_PRECISIONS[inputs.kvPrecision ?? DEFAULTS.kvPrecision].label}）`}
+                      label={`K/V Cache（${CACHE_PRECISIONS[kvPrecisionValue].label}）`}
                       value={result.kvCacheBreakdown.kvCache}
                       formula={`${inputs.kvCacheTokens ?? DEFAULTS.kvCacheTokens} × ${inputs.kvCacheSequences ?? DEFAULTS.kvCacheSequences} × ${result.kvCacheInfo.layers} + MTP ${inputs.mtpLayers} × ${result.kvCacheBreakdown.kvCopies} × (${result.kvCacheInfo.kvHeads} ÷ TP ${result.attentionTp}) × ${result.kvCacheInfo.headDim} × ${result.kvCacheBreakdown.kvBytesPerElement} B`}
                     />

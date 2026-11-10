@@ -196,8 +196,8 @@ test("主表下方隔行给出基础信息，且横向多列排布", () => {
   assert.equal(lookup["EP size"], 32);
   assert.equal(lookup["单卡权重"], `${(PER_TOTAL / GIB).toFixed(2)} GiB`);
   assert.equal(lookup["有效 KV / Index 层"], "92 / 23");
-  assert.equal(lookup["KV 精度"], "BF16 / FP16");
-  assert.equal(lookup["Index 精度"], "FP8 / INT8");
+  assert.equal(lookup["KV 精度"], "BF16（16 bit）");
+  assert.equal(lookup["Index 精度"], "INT8（8 bit）");
 });
 
 test("无 KV 公式或无权重时不报错，主表仍保留合计行", () => {

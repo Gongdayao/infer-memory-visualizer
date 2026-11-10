@@ -83,9 +83,11 @@ export type ExportContext = {
 export const EXPORT_SHEET_NAME = "权重与显存";
 
 const PRECISION_LABEL: Record<CachePrecision, string> = {
-  bf16_fp16: "BF16 / FP16",
-  fp8_int8: "FP8 / INT8",
-  fp4_int4: "FP4 / INT4",
+  bf16_fp16: "BF16（16 bit）",
+  fp8_int8: "INT8（8 bit）",
+  fp4_int4: "INT4（4 bit）",
+  mxfp8: "MXFP8（8 bit）",
+  mxfp4: "MXFP4（4 bit）",
 };
 
 const PARALLEL_LABEL: Record<string, string> = {

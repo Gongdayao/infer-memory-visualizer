@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { calculateKvCache, getKvCacheModelInfo } from "../app/kv-cache-model.ts";
+import { cachePrecisionOptions, calculateKvCache, getKvCacheModelInfo } from "../app/kv-cache-model.ts";
 
 test("MiniMax M3 stores K and V separately and supports FP4 index cache", () => {
   const info = getKvCacheModelInfo("minimax-m3");
@@ -168,4 +168,35 @@ test("Step 5 Preview：TP 无法整除 KV 头数时退回线性均分", () => {
   assert.ok(tp1 && tp3);
   assert.equal(tp3.kvCache, tp1.kvCache / 3);
   assert.equal(tp3.indexCache, tp1.indexCache);
+});
+
+test("精度档位按权重形态（mxfp）与 c 位推导，不受支持的档位不返回", () => {
+  // A2/A3 形态：c8 预选 INT8
+  const plain = cachePrecisionOptions("GLM-5.3-w8a8c8", "glm-5.3", "kv");
+  assert.deepEqual(plain.options, ["bf16_fp16", "fp8_int8"]);
+  assert.equal(plain.defaultValue, "fp8_int8");
+
+  // A5 形态：c8 预选 MXFP8，4-bit 未在权重中声明则不给
+  const a5 = cachePrecisionOptions("GLM-5.3-w4a4c8-mxfp4", "glm-5.3", "kv");
+  assert.deepEqual(a5.options, ["bf16_fp16", "mxfp8"]);
+  assert.equal(a5.defaultValue, "mxfp8");
+
+  // 无 c 位 → 默认 BF16，仍可切同形态 8bit
+  const raw = cachePrecisionOptions("Qwen3-32B-w8a8", "qwen3-32b", "kv");
+  assert.deepEqual(raw.options, ["bf16_fp16", "fp8_int8"]);
+  assert.equal(raw.defaultValue, "bf16_fp16");
+
+  // 打包页模型（V4.1）额外提供 4bit
+  const v41 = cachePrecisionOptions("DeepSeek-V4.1-Flash-w8a8", "deepseek-v4.1-flash", "kv");
+  assert.deepEqual(v41.options, ["bf16_fp16", "fp8_int8"]);
+  const v41a5 = cachePrecisionOptions("DeepSeek-V4.1-Flash-w8a8-mxfp8", "deepseek-v4.1-flash", "kv");
+  assert.deepEqual(v41a5.options, ["bf16_fp16", "mxfp8", "mxfp4"]);
+  assert.deepEqual(cachePrecisionOptions("DeepSeek-V4.1-Flash-w8a8-mxfp8", "deepseek-v4.1-flash", "index").options, ["mxfp4"]);
+  assert.deepEqual(cachePrecisionOptions("GLM-5.3-w4a4c8-mxfp4", "glm-5.3", "index").options, ["mxfp8"]);
+
+  // Index：无 indexer 返回空（前端隐藏）
+  assert.deepEqual(cachePrecisionOptions("Kimi-K2.5-w4a8", "kimi-k2.5", "index").options, []);
+  // Index：固定值的模型只给一个只读档
+  assert.deepEqual(cachePrecisionOptions("MiniMax-M3-w8a8c8", "minimax-m3", "index").options, ["bf16_fp16"]);
+  assert.deepEqual(cachePrecisionOptions("Step-5-Preview-w8a8-mxfp8", "step-5-preview", "index").options, ["fp8_int8"]);
 });
