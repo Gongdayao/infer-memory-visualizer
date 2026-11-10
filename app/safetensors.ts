@@ -35,6 +35,7 @@ const DTYPE_BYTES: Record<string, number> = {
   BOOL: 1,
   F8_E4M3: 1,
   F8_E5M2: 1,
+  F8_E8M0: 1,
   I4: 0.5,
   U4: 0.5,
 };
@@ -89,7 +90,11 @@ export function parseSafetensorsHeader(buf: ArrayBuffer): SafetensorsHeader {
       shape: t.shape,
       dataOffsets: [t.data_offsets[0], t.data_offsets[1]],
       numel,
-      bytes: numel * dtypeBytes(t.dtype),
+      // data_offsets 是文件里的精确字节边界；未知 dtype（如 F8_E8M0）也能算准，
+      // 只有在缺失 offsets 时才退回 numel × dtype 字节数。
+      bytes: Array.isArray(t.data_offsets) && t.data_offsets.length === 2 && t.data_offsets[1] > t.data_offsets[0]
+        ? t.data_offsets[1] - t.data_offsets[0]
+        : numel * dtypeBytes(t.dtype),
     });
   }
   return { metadata, tensors };

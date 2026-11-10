@@ -55,3 +55,21 @@ test("header 声明长度超过提供字节时报错", () => {
 test("不足 8 字节报错", () => {
   assert.throws(() => parseSafetensorsHeader(new ArrayBuffer(4)), /不足 8 字节/);
 });
+test("未知/scale dtype 用 data_offsets 精确计字节（F8_E8M0 = 1 B）", () => {
+  assert.equal(dtypeBytes("F8_E8M0"), 1);
+  const header = {
+    __metadata__: { format: "pt" },
+    "w.weight": { dtype: "I8", shape: [2, 4], data_offsets: [0, 8] },
+    "w.scale": { dtype: "F8_E8M0", shape: [2], data_offsets: [8, 10] },
+  };
+  const json = new TextEncoder().encode(JSON.stringify(header));
+  const buf = new ArrayBuffer(8 + json.byteLength);
+  new DataView(buf).setBigUint64(0, BigInt(json.byteLength), true);
+  new Uint8Array(buf, 8).set(json);
+  const parsed = parseSafetensorsHeader(buf);
+  const byName = Object.fromEntries(parsed.tensors.map((t) => [t.name, t.bytes]));
+  assert.equal(byName["w.weight"], 8);
+  // F8_E8M0 只有 1 字节/元素，且以 data_offsets 为准
+  assert.equal(byName["w.scale"], 2);
+});
+
