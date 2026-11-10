@@ -107,6 +107,8 @@ type KvCacheInput = {
   modelId: string;
   tokens: number;
   sequences: number;
+  /** 数据并行副本数：总并发序列按 DP 均分到各副本，单卡只承担 1/DP 的 KV。 */
+  dpSize?: number;
   kvPrecision: CachePrecision;
   indexPrecision: CachePrecision;
   mtpLayers?: number;
@@ -155,6 +157,7 @@ export function calculateKvCache({
   indexPrecision,
   mtpLayers = 0,
   tpSize = 1,
+  dpSize = 1,
 }: KvCacheInput): KvCacheBreakdown | null {
   const upstream = findUpstreamModel(modelId);
   const info = getKvCacheModelInfo(modelId);
@@ -163,6 +166,9 @@ export function calculateKvCache({
   const safeSequences = Math.max(0, Math.floor(sequences));
   const safeMtpLayers = Math.max(0, Math.floor(mtpLayers));
   const safeTp = Math.max(1, Math.floor(tpSize));
+  const safeDp = Math.max(1, Math.floor(dpSize));
+  // 总并发序列按 DP 副本均分；每个副本只缓存自己那部分序列的 KV。
+  const perRankSequences = Math.ceil(safeSequences / safeDp);
   const effectiveKvLayers = info.layers + safeMtpLayers;
   // sliding 型 MTP 层不携带索引器，索引层数不随 MTP 增长。
   const effectiveIndexLayers =
@@ -191,7 +197,7 @@ export function calculateKvCache({
   const model = { ...upstream, fields: fieldsWithMtpLayers(upstream, info, safeMtpLayers) };
   const input = {
     tokens: safeTokens,
-    sequences: safeSequences,
+    sequences: perRankSequences,
     precision: kvPrecision,
     indexerPrecision: indexPrecision,
   };
@@ -201,7 +207,10 @@ export function calculateKvCache({
   try {
     // 上游按每个缓存组的头数把开销分摊到 TP 卡：KV 组按 KV 头数（头数少于 TP 时在卡间重复），
     // 索引器只有单个 K 头，因此每张卡都持有完整索引器缓存。
-    const result = kvCacheCalculator.calculate(model, { ...input, tensorParallel: safeTp });
+    const result = kvCacheCalculator.calculate(model, { ...input, tensorParallel: safeTp }, {
+      precisionOptions: (kvModelData as { precision_options?: unknown }).precision_options,
+      indexerPrecisionOptions: (kvModelData as { indexer_precision_options?: unknown }).indexer_precision_options,
+    });
     kvCache = 0;
     indexCache = 0;
     for (const group of result.cacheGroups) {
@@ -211,7 +220,10 @@ export function calculateKvCache({
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     // TP 与头数无法整除时（例如 4 个 KV 头配 TP=3），退回按 TP 线性均分。
-    const result = kvCacheCalculator.calculate(model, { ...input, tensorParallel: 1 });
+    const result = kvCacheCalculator.calculate(model, { ...input, tensorParallel: 1 }, {
+      precisionOptions: (kvModelData as { precision_options?: unknown }).precision_options,
+      indexerPrecisionOptions: (kvModelData as { indexer_precision_options?: unknown }).indexer_precision_options,
+    });
     kvCache = result.kvBytes / safeTp;
     indexCache = result.indexerBytes;
   }

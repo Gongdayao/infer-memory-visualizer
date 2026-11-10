@@ -290,6 +290,7 @@ export default function Home() {
       indexPrecision,
       mtpLayers: Math.floor(safe(inputs.mtpLayers)),
       tpSize: attentionTp,
+      dpSize: dp,
     }) ?? null : null;
     const kvCache = kvCacheBreakdown?.total ?? 0;
 
@@ -467,7 +468,7 @@ export default function Home() {
                 <legend>KV Cache</legend>
                 <div className="field-grid">
                   <NumberField label="Tokens / sequence" value={inputs.kvCacheTokens ?? DEFAULTS.kvCacheTokens} onChange={(v) => update("kvCacheTokens", v)} />
-                  <NumberField label="Concurrent sequences" value={inputs.kvCacheSequences ?? DEFAULTS.kvCacheSequences} onChange={(v) => update("kvCacheSequences", v)} />
+                  <NumberField label="Concurrent sequences（总并发，按 DP 均分）" value={inputs.kvCacheSequences ?? DEFAULTS.kvCacheSequences} onChange={(v) => update("kvCacheSequences", v)} />
                 </div>
                 <div className="field-grid cache-precision-fields">
                   <SelectField

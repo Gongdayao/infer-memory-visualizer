@@ -200,3 +200,18 @@ test("精度档位按权重形态（mxfp）与 c 位推导，不受支持的档�
   assert.deepEqual(cachePrecisionOptions("MiniMax-M3-w8a8c8", "minimax-m3", "index").options, ["bf16_fp16"]);
   assert.deepEqual(cachePrecisionOptions("Step-5-Preview-w8a8-mxfp8", "step-5-preview", "index").options, ["fp8_int8"]);
 });
+
+test("总并发序列按 DP 分摊到各副本（单卡只承担 1/DP）", () => {
+  const one = calculateKvCache({ modelId: "minimax-m3.1-flash", tokens: 131072, sequences: 8, kvPrecision: "bf16_fp16", indexPrecision: "bf16_fp16", tpSize: 8, dpSize: 1 });
+  const four = calculateKvCache({ modelId: "minimax-m3.1-flash", tokens: 131072, sequences: 8, kvPrecision: "bf16_fp16", indexPrecision: "bf16_fp16", tpSize: 8, dpSize: 4 });
+  assert.equal(four.total * 4, one.total);
+  // 4 DP × 8 TP、128K × 8 并发：单卡 KV ≈ 11.25 GiB
+  assert.ok(Math.abs(four.total / 2 ** 30 - 11.25) < 0.01);
+});
+
+test("MXFP8 KV 精度真正生效（不再回落到 BF16）", () => {
+  const bf16 = calculateKvCache({ modelId: "minimax-m3.1-flash", tokens: 1000000, sequences: 1, kvPrecision: "bf16_fp16", indexPrecision: "bf16_fp16", tpSize: 8 });
+  const mxfp8 = calculateKvCache({ modelId: "minimax-m3.1-flash", tokens: 1000000, sequences: 1, kvPrecision: "mxfp8", indexPrecision: "bf16_fp16", tpSize: 8 });
+  assert.ok(mxfp8.kvCache < bf16.kvCache);
+  assert.ok(Math.abs(mxfp8.kvCache / bf16.kvCache - 1.03125 / 2) < 0.001);
+});
