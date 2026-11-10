@@ -116,6 +116,11 @@ test("categorizeTensor 细分到注意力/索引器/专家等类别", () => {
   assert.equal(categorizeTensor("embed.weight"), "embedding");
   assert.equal(categorizeTensor("head.weight"), "lm_head");
   assert.equal(categorizeTensor("mtp.2.head.weight"), "lm_head");
+  // MTP 投影按 TP 切分；Engram/PLE 的投影权重同理
+  assert.equal(categorizeTensor("mtp.fc.weight"), "dense_mlp");
+  assert.equal(categorizeTensor("mtp.0.main_proj.weight"), "dense_mlp");
+  assert.equal(categorizeTensor("model.language_model.layers.3.ple.key_proj.weight"), "attention_qkv");
+  assert.equal(categorizeTensor("layers.14.engram.q_weight"), "attention_qkv");
 });
 
 test("calculateWeightCategories 按类别汇总且与模块级结果对账", () => {

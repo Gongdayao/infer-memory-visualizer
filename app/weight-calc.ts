@@ -92,7 +92,7 @@ const NORM = [
   "layernorm", "rmsnorm", "norm.weight", "norm.", "norm1", "norm2", "q_norm",
   "k_norm", "kv_norm", "ln_1", "ln_2", "final_norm",
 ];
-const ATTENTION = [
+const ATTENTION = ["engram.q_weight", "engram.k_weight", "ple.key_proj", 
   "attention", "attn", "q_proj", "k_proj", "v_proj", "o_proj", "wq", "wkv",
   "q_a_proj", "q_b_proj", "kv_a_proj", "kv_b_proj", "index", "linear_attn",
   "mamba", "a_log", "conv1d", "dt_bias", "mixer",
@@ -100,6 +100,8 @@ const ATTENTION = [
 const DENSE_MLP = [
   "gate_proj", "up_proj", "down_proj", "dense_h_to_4h", "dense_4h_to_h",
   "fc1", "fc2", "linear_fc1", "linear_fc2", "mlp", "ffn",
+  // MTP 的输入/主干投影同样是线性层，按 TP 切分
+  "mtp.fc.", "main_proj", "mtp.pre_fc",
 ];
 const OPROJ = ["o_proj", "out_proj", "wo_a", "wo_b"];
 
