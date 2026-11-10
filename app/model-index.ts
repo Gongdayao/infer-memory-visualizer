@@ -206,6 +206,29 @@ export const KV_MODEL_ID: Record<string, string> = {
   "gemma-4-31B-it": "gemma-4-31b",
   "Step-3.5-Flash": "step-3.5-flash",
   "Step-3.7-Flash": "step-3.7-flash",
+  // 以下权重的文本主干与上游已收录模型结构一致（层数 / KV 头数 / head_dim / kv_lora_rank 逐项核对），
+  // 适配阶段直接复用同一份 KV 数据：
+  //   Qwen3-235B-A22B-Instruct-2507、Qwen3-VL-235B-A22B -> qwen3-235b-a22b (94/4/128)
+  //   Qwen3-30B-A3B-Thinking-2507、Qwen3-Coder-30B-A3B、Qwen3-VL-30B-A3B -> qwen3-30b-a3b (48/4/128)
+  //   Qwen3-VL-32B -> qwen3-32b (64/8/128)、Qwen3-VL-8B -> qwen3-8b (36/8/128)
+  //   Qwen2.5-VL-72B -> qwen2.5-72b (80/8)、Qwen2.5-VL-7B -> qwen2.5-7b (28/4)
+  //   KIMI-k2-* -> kimi-k2.5 (61/64/kv_lora 512)
+  //   DeepSeek-V3.1 / -Terminus -> deepseek-v3 (61/128/kv_lora 512)
+  //   DeepSeek-V4-Flash-Vision-Exp -> deepseek-v4-flash (43/1/512)
+  "Qwen3-235B-A22B-Instruct-2507": "qwen3-235b-a22b",
+  "Qwen3-VL-235B-A22B-Instruct": "qwen3-235b-a22b",
+  "Qwen3-30B-A3B-Thinking-2507": "qwen3-30b-a3b",
+  "Qwen3-Coder-30B-A3B-Instruct": "qwen3-30b-a3b",
+  "Qwen3-VL-30B-A3B-Instruct": "qwen3-30b-a3b",
+  "Qwen3-VL-32B-Instruct": "qwen3-32b",
+  "Qwen3-VL-8B-Instruct": "qwen3-8b",
+  "Qwen2.5-VL-72B-Instruct": "qwen2.5-72b",
+  "Qwen2.5-VL-7B-Instruct": "qwen2.5-7b",
+  "KIMI-k2-Instruct-0905": "kimi-k2.5",
+  "KIMI-k2-Thinking": "kimi-k2.5",
+  "DeepSeek-V3.1": "deepseek-v3",
+  "DeepSeek-V3.1-Terminus": "deepseek-v3",
+  "DeepSeek-V4-Flash-Vision-Exp": "deepseek-v4-flash",
   // DeepSeek V4.1：KV 为 vllm-ascend 的整页缓存（压缩 MLA + indexer + 128 token SWA 合成一页）。
   "DeepSeek-V4.1-Flash": "deepseek-v4.1-flash",
   "DeepSeek-V4.1-Flash-1017": "deepseek-v4.1-flash-1017",

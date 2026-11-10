@@ -69,6 +69,12 @@ test("KV_MODEL_ID 映射键均存在于某些厂商的原始权重中", () => {
   // V4.1 走 vllm-ascend 的整页缓存模型
   assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash"), "deepseek-v4.1-flash");
   assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash-1017"), "deepseek-v4.1-flash-1017");
+  // 结构完全匹配已有上游模型的权重直接复用其 KV 数据
+  assert.equal(kvCacheModelIdOf("Qwen3-235B-A22B-Instruct-2507"), "qwen3-235b-a22b");
+  assert.equal(kvCacheModelIdOf("Qwen3-VL-32B-Instruct"), "qwen3-32b");
+  assert.equal(kvCacheModelIdOf("KIMI-k2-Instruct-0905"), "kimi-k2.5");
+  assert.equal(kvCacheModelIdOf("DeepSeek-V3.1"), "deepseek-v3");
+  assert.equal(kvCacheModelIdOf("DeepSeek-V4-Flash-Vision-Exp"), "deepseek-v4-flash");
   // 上游尚未收录的模型保持无 KV 公式
   assert.equal(kvCacheModelIdOf("Kimi-K3.1-Pro"), undefined);
 });
