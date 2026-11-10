@@ -66,8 +66,10 @@ test("KV_MODEL_ID 映射键均存在于某些厂商的原始权重中", () => {
   assert.equal(kvCacheModelIdOf("Step-3.5-Flash"), "step-3.5-flash");
   assert.equal(kvCacheModelIdOf("Step-3.7-Flash"), "step-3.7-flash");
   assert.equal(kvCacheModelIdOf("Step-5-Preview"), "step-5-preview");
+  // V4.1 走 vllm-ascend 的整页缓存模型
+  assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash"), "deepseek-v4.1-flash");
+  assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash-1017"), "deepseek-v4.1-flash-1017");
   // 上游尚未收录的模型保持无 KV 公式
-  assert.equal(kvCacheModelIdOf("DeepSeek-V4.1-Flash"), undefined);
   assert.equal(kvCacheModelIdOf("Kimi-K3.1-Pro"), undefined);
 });
 

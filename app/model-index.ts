@@ -206,6 +206,9 @@ export const KV_MODEL_ID: Record<string, string> = {
   "gemma-4-31B-it": "gemma-4-31b",
   "Step-3.5-Flash": "step-3.5-flash",
   "Step-3.7-Flash": "step-3.7-flash",
+  // DeepSeek V4.1：KV 为 vllm-ascend 的整页缓存（压缩 MLA + indexer + 128 token SWA 合成一页）。
+  "DeepSeek-V4.1-Flash": "deepseek-v4.1-flash",
+  "DeepSeek-V4.1-Flash-1017": "deepseek-v4.1-flash-1017",
   // Step 5 Preview：Sparse GQA + 8-token 块压缩索引器（上游数据见 kv-cache-calculator）。
   "Step-5-Preview": "step-5-preview",
 };
