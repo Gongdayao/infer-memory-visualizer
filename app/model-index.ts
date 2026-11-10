@@ -200,7 +200,6 @@ export const KV_MODEL_ID: Record<string, string> = {
   "Qwen3.8-27B": "qwen3.8-27b",
   "Qwen3.5-4B": "qwen3.5-4b",
   "GLM-5.3": "glm-5.3",
-  "GLM-5.3-Flash": "glm-5.3-flash",
   "MiniMax-M3.1-Flash": "minimax-m3.1-flash",
   "gemma-4-26B-A4B-it": "gemma-4-26b-a4b",
   "gemma-4-31B-it": "gemma-4-31b",
