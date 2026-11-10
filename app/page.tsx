@@ -55,6 +55,7 @@ const align = (value: number, boundary: number) =>
 const align480To512 = (value: number) => Math.ceil(value / 480) * 512;
 
 const MODULE_LABEL: Record<TensorModule, string> = {
+  host_memory: "Engram/PLE（主机内存）",
   routed_expert: "路由专家",
   shared_expert: "共享专家",
   dense_mlp: "Dense MLP",

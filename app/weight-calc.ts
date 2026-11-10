@@ -11,6 +11,7 @@ import type { SafetensorInfo } from "./safetensors";
 export type WeightTensor = Pick<SafetensorInfo, "name" | "dtype" | "shape" | "bytes">;
 
 export type TensorModule =
+  | "host_memory"
   | "routed_expert"
   | "shared_expert"
   | "dense_mlp"
@@ -43,6 +44,7 @@ export type ModuleBreakdown = {
  * 便于按「类别 × 切分方式」汇总单卡占用。
  */
 export type WeightCategory =
+  | "host_memory"
   | "routed_expert"
   | "shared_expert"
   | "attention_qkv"
@@ -57,7 +59,7 @@ export type WeightCategory =
   | "other";
 
 /** 类别 → 切分维度（replicated 表示每张卡保留完整副本）。 */
-export type CategoryParallel = keyof WeightParallel | "replicated";
+export type CategoryParallel = keyof WeightParallel | "replicated" | "host";
 
 export type WeightCategoryRow = {
   category: WeightCategory;
@@ -79,9 +81,7 @@ export type WeightResult = {
 };
 
 const VISION = ["vision", "visual", "projector", "patch_merge", "vae", "vision_model"];
-// ple_embedding / ngram_embedding 是 Qwen3.8-Flash-Next 这类模型的超大查表嵌入（PLE），
-// 按词表并行处理（÷ embeddingTp），否则会被当成复本而严重高估单卡占用。
-const EMBEDDING = ["embed_tokens", "word_embedding", "wte.", "ple_embedding", "ngram_embedding"];
+const EMBEDDING = ["embed_tokens", "word_embedding", "wte."];
 // shared_head.output 是 MTP 投机层的输出头（词表 × hidden），切分行为与 LM Head 一致。
 // shared_head.output（Step）与 shared_head.head（GLM）都是 MTP 投机层的输出头，与 LM Head 同切分。
 const LM_HEAD = ["lm_head", "final_fc", "score_head", "shared_head.output", "shared_head.head"];
@@ -118,6 +118,7 @@ function isMoERoutedExpert(name: string): boolean {
 }
 
 const CATEGORY_LABEL: Record<WeightCategory, string> = {
+  host_memory: "Engram / PLE（主机内存）",
   routed_expert: "路由专家（Routed Expert）",
   shared_expert: "共享专家（Share Expert）",
   attention_qkv: "Attention QKV / Gate",
@@ -134,6 +135,7 @@ const CATEGORY_LABEL: Record<WeightCategory, string> = {
 
 /** 类别展示顺序（导出时再按单卡占用降序重排）。 */
 export const WEIGHT_CATEGORY_ORDER: WeightCategory[] = [
+  "host_memory",
   "routed_expert",
   "attention_qkv",
   "vision",
@@ -149,6 +151,8 @@ export const WEIGHT_CATEGORY_ORDER: WeightCategory[] = [
 ];
 
 const CATEGORY_PARALLEL: Record<WeightCategory, CategoryParallel> = {
+  // Engram 表与 Qwen4Exp PLE 表默认 CPU offload 到主机内存（vLLM --engram-config），不占显存。
+  host_memory: "host",
   routed_expert: "ep",
   shared_expert: "sharedExpertTp",
   attention_qkv: "attentionTp",
@@ -164,6 +168,7 @@ const CATEGORY_PARALLEL: Record<WeightCategory, CategoryParallel> = {
 };
 
 const CATEGORY_MODULE: Record<WeightCategory, TensorModule> = {
+  host_memory: "host_memory",
   routed_expert: "routed_expert",
   shared_expert: "shared_expert",
   attention_qkv: "attention",
@@ -180,7 +185,16 @@ const CATEGORY_MODULE: Record<WeightCategory, TensorModule> = {
 
 /** 将张量名归类到细分权重类别。量化辅助张量（weight_scale 等）跟随主权重归类。 */
 export function categorizeTensor(name: string): WeightCategory {
+  // Engram（DeepSeek-V4.1）与 PLE（Qwen4Exp）是只查表、不参与计算的静态表，
+  // vLLM 默认把它们 CPU offload 到主机内存（--engram-config.cpu_offload=true），
+  // 因此不计入单卡显存；仍需在全量权重里体现。
+  if (name.includes("engram.embed") || name.includes("ple_embedding") || name.includes("ngram_embedding")) {
+    return "host_memory";
+  }
   if (includes(name, VISION)) return "vision";
+  // 裸名 embed.weight / head.weight（DeepSeek-V4.1 的顶层词嵌入与输出头）按词表并行。
+  if (/(^|\.)embed\.weight$/.test(name)) return "embedding";
+  if (/(^|\.)head\.weight$/.test(name)) return "lm_head";
   if (includes(name, EMBEDDING)) return "embedding";
   if (includes(name, LM_HEAD)) return "lm_head";
   if (includes(name, SHARED_EXPERT)) return "shared_expert";
@@ -213,6 +227,8 @@ export function divisorForCategory(
   category: WeightCategory,
   p: WeightParallel,
 ): number {
+  // 主机内存类别不占显存：单卡为 0。
+  if (category === "host_memory") return Number.POSITIVE_INFINITY;
   const safe = (v: number, dflt: number) => (Number.isFinite(v) && v > 0 ? v : dflt);
   const tp = safe(p.tp, 1);
   switch (CATEGORY_PARALLEL[category]) {
@@ -271,6 +287,7 @@ export function calculateWeightCategories(
 function newBreakdown(): Record<TensorModule, ModuleBreakdown> {
   const empty: ModuleBreakdown = { full: 0, perDevice: 0, tensors: 0 };
   return {
+    host_memory: { ...empty },
     routed_expert: { ...empty },
     shared_expert: { ...empty },
     dense_mlp: { ...empty },
@@ -299,6 +316,8 @@ export function calculateWeightFromTensors(
 
   const divisorFor = (module: TensorModule, name: string): number => {
     switch (module) {
+      case "host_memory":
+        return Number.POSITIVE_INFINITY;
       case "routed_expert":
         return ep;
       case "shared_expert":

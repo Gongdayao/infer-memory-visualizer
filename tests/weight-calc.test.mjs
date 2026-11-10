@@ -108,9 +108,14 @@ test("categorizeTensor 细分到注意力/索引器/专家等类别", () => {
   assert.equal(categorizeTensor("model.visual.blocks.0.attn.proj.weight"), "vision");
   assert.equal(categorizeTensor("model.layers.0.mlp.gate_proj.weight"), "dense_mlp");
   assert.equal(categorizeTensor("model.layers.92.eh_proj.weight"), "other");
-  // 超大查表嵌入按词表并行；GLM 的 MTP 输出头与 LM Head 同切分
-  assert.equal(categorizeTensor("model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight"), "embedding");
+  // Engram / PLE 静态表默认 CPU offload 到主机内存，不计入显存
+  assert.equal(categorizeTensor("layers.14.engram.embed.weight"), "host_memory");
+  assert.equal(categorizeTensor("model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight"), "host_memory");
   assert.equal(categorizeTensor("model.language_model.layers.45.shared_head.head.weight"), "lm_head");
+  // V4.1 的顶层裸名张量
+  assert.equal(categorizeTensor("embed.weight"), "embedding");
+  assert.equal(categorizeTensor("head.weight"), "lm_head");
+  assert.equal(categorizeTensor("mtp.2.head.weight"), "lm_head");
 });
 
 test("calculateWeightCategories 按类别汇总且与模块级结果对账", () => {
