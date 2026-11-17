@@ -72,3 +72,34 @@ export function stageRanges(counts: number[]): Array<[number, number]> {
   }
   return ranges;
 }
+
+/** 解析用户输入的层数分布（如 "15,15,16,15"）；非法返回 null。 */
+export function parsePartition(text: string): number[] | null {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(/[\s,，]+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  const counts = parts.map((part) => Number(part));
+  if (counts.some((n) => !Number.isInteger(n) || n < 1)) return null;
+  return counts;
+}
+
+/**
+ * 决定最终使用哪一组 stage 层数：
+ * - 手动输入合法（个数 = pp、每级 ≥1、总和 = 层数）→ 用手动值；
+ * - 否则回退到自动分区，并标记 valid=false 供 UI 提示。
+ */
+export function resolveStageCounts(
+  layers: number,
+  pp: number,
+  text: string,
+): { counts: number[]; source: "manual" | "auto"; valid: boolean } {
+  const auto = partitionLayers(layers, pp);
+  const manual = parsePartition(text);
+  if (!manual) return { counts: auto, source: "auto", valid: true };
+  const sum = manual.reduce((a, b) => a + b, 0);
+  const valid = manual.length === pp && sum === layers;
+  return valid
+    ? { counts: manual, source: "manual", valid: true }
+    : { counts: auto, source: "auto", valid: false };
+}

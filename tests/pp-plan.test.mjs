@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { partitionLayers, ppEligibility, stageRanges } from "../app/pp-plan.ts";
+import { parsePartition, partitionLayers, ppEligibility, resolveStageCounts, stageRanges } from "../app/pp-plan.ts";
 import { calculateWeightFromTensors, stageOfTensor } from "../app/weight-calc.ts";
 
 test("自动分区遵循 vLLM 规则：余数从倒数第二级往前分", () => {
@@ -50,4 +50,23 @@ test("逐 stage 权重：首级含 embedding、末级含 LM head、复本两级�
   assert.equal(stage1.perDeviceWeight, 200 + 2000 + 50);
   // 全 stage 之和 = 全部层 + 边缘模块 + 复本×stage 数
   assert.equal(stage0.perDeviceWeight + stage1.perDeviceWeight, 100 + 200 + 1000 + 2000 + 50 * 2);
+});
+
+test("手动层数分布：合法则采用，非法回退自动并标记", () => {
+  assert.deepEqual(parsePartition("15,15,16,15"), [15, 15, 16, 15]);
+  assert.deepEqual(parsePartition(" 15 15 16 15 "), [15, 15, 16, 15]);
+  assert.equal(parsePartition(""), null);
+  assert.equal(parsePartition("15,0,46"), null);
+
+  const ok = resolveStageCounts(61, 4, "32,29,0,0".replace(",0,0", "").padEnd(0) || "32,29");
+  // 个数不足 → 回退自动
+  assert.equal(ok.source, "auto");
+  assert.equal(ok.valid, false);
+
+  const manual = resolveStageCounts(61, 2, "32,29");
+  assert.deepEqual(manual, { counts: [32, 29], source: "manual", valid: true });
+
+  const auto = resolveStageCounts(61, 4, "");
+  assert.deepEqual(auto.counts, [15, 15, 16, 15]);
+  assert.equal(auto.source, "auto");
 });

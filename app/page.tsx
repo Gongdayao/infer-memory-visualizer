@@ -7,12 +7,14 @@ import { fetchModelWeightData, type ModelWeightData, type WeightLoadProgress } f
 import { calculateWeightFromTensors, type TensorModule } from "./weight-calc";
 import { buildExportSheet, exportFileName } from "./export-excel";
 import { downloadXlsx } from "./xlsx";
-import { partitionLayers, ppEligibility, stageRanges } from "./pp-plan";
+import { partitionLayers, ppEligibility, resolveStageCounts, stageRanges } from "./pp-plan";
 
 type Inputs = {
   maxBatchedTokens: number;
   dpSize: number;
   ppSize: number;
+  /** 每级层数分布（如 "15,15,16,15"）；留空表示自动分区。 */
+  ppPartition: string;
   tpSize: number;
   attentionTpSize: number | null;
   oprojTpSize: number | null;
@@ -33,6 +35,7 @@ const DEFAULTS: Inputs = {
   maxBatchedTokens: 4096,
   dpSize: 8,
   ppSize: 1,
+  ppPartition: "",
   tpSize: 4,
   attentionTpSize: null,
   oprojTpSize: null,
@@ -200,7 +203,9 @@ export default function Home() {
   const struct = modelData?.struct;
   // PP：仅对实现了 SupportsPP 的家族开放；层数不足或未登记时禁用。
   const ppSupport = weight ? ppEligibility(weight.rawName) : { level: "none" as const, reason: "未选择权重" };
-  const ppEligible = ppSupport.level !== "none" && (struct?.numLayers ?? 0) >= 2;
+  const ppEligible = ppSupport.level !== "none";
+  const ppClamped = struct ? Math.min(Math.max(1, Math.floor(safe(inputs.ppSize, 1))), struct.numLayers) : 1;
+  const ppPartitionState = struct ? resolveStageCounts(struct.numLayers, ppClamped, inputs.ppPartition) : null;
 
   // 权重切分仅依赖已缓存的张量清单与并行参数：改 DP/TP 时只重算、不重拉。
   const weightResult = useMemo(() => {
@@ -233,6 +238,17 @@ export default function Home() {
   const indexPrecisionValue = indexPrecisionOptions.includes((inputs.indexCachePrecision ?? DEFAULTS.indexCachePrecision) as CachePrecision)
     ? (inputs.indexCachePrecision as CachePrecision)
     : indexPrecisionSpec.defaultValue;
+
+  // 首次设置 PP（或换权重）时用自动分区回填层数分布；用户手改后不再覆盖。
+  useEffect(() => {
+    if (!struct) return;
+    const layers = struct.numLayers;
+    const pp = Math.min(Math.max(1, Math.floor(safe(inputs.ppSize, 1))), layers);
+    const text = pp > 1 ? partitionLayers(layers, pp).join(",") : "";
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setInputs((current) => (current.ppPartition === text ? current : { ...current, ppPartition: text }));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [weightKey, struct, inputs.ppSize]);
 
   // 切换权重时按"权重名 + 模型族"重新预选缓存精度（c8 → 8bit、无 c → BF16）。
   useEffect(() => {
@@ -300,10 +316,11 @@ export default function Home() {
     }) ?? null : null;
     const kvCache = kvCacheBreakdown?.total ?? 0;
 
-    // ---- PP：按 vLLM 的分区规则切成 stage，逐 stage 计算 ----
-    const pp = ppEligible && struct ? Math.min(Math.max(1, Math.floor(safe(inputs.ppSize, 1))), struct.numLayers) : 1;
+    // ---- PP：理论计算器，对所有模型开放；层数分布可手填，非法时回退自动分区 ----
+    const pp = struct ? Math.min(Math.max(1, Math.floor(safe(inputs.ppSize, 1))), struct.numLayers) : 1;
+    const resolved = struct ? resolveStageCounts(struct.numLayers, pp, inputs.ppPartition) : null;
     let stages: Array<{ index: number; start: number; end: number; weight: number; kv: number; total: number }> | null = null;
-    if (pp > 1 && struct && modelData) {
+    if (pp > 1 && struct && modelData && resolved) {
       const parallel = {
         tp,
         ep,
@@ -313,8 +330,7 @@ export default function Home() {
         lmHeadTp: Math.max(1, Math.floor(safe(inputs.lmHeadTpSize ?? tp, 1))),
         sharedExpertTp: Math.max(1, Math.floor(safe(inputs.sharedExpertTpSize, 1))),
       };
-      const counts = partitionLayers(struct.numLayers, pp);
-      const ranges = stageRanges(counts);
+      const ranges = stageRanges(resolved.counts);
       stages = ranges.map(([from, to], index) => {
         const wr = calculateWeightFromTensors(modelData.tensors, parallel, { ranges, stage: index });
         const stageKv = kvCacheModelId
@@ -549,14 +565,31 @@ export default function Home() {
               <div className="field-grid">
                 <NumberField label="DP size" value={inputs.dpSize} onChange={(v) => update("dpSize", v)} />
                 <NumberField label="TP size" value={inputs.tpSize} onChange={(v) => update("tpSize", v)} />
-                {ppEligible && (
+                {struct && (
                   <NumberField label="PP size" value={inputs.ppSize ?? 1} onChange={(v) => update("ppSize", v)} />
                 )}
               </div>
-              {weight && !ppEligible && (
-                <p className="field-note">
-                  该权重不开放 PP：{"reason" in ppSupport ? ppSupport.reason : "未登记 PP 支持"}。
-                </p>
+              {struct && ppClamped > 1 && (
+                <>
+                  <div className="field-grid">
+                    <TextField
+                      label="每级层数（逗号分隔）"
+                      value={inputs.ppPartition ?? ""}
+                      onChange={(value) => setInputs((current) => ({ ...current, ppPartition: value }))}
+                    />
+                  </div>
+                  <p className="field-note">
+                    自动分区：{partitionLayers(struct.numLayers, ppClamped).join(",")}
+                    {ppPartitionState
+                      ? ppPartitionState.valid
+                        ? `；当前按${ppPartitionState.source === "manual" ? "手动" : "自动"}分布计算。`
+                        : "；输入非法（个数需等于 PP、每级 ≥1、总和需等于层数），已回退自动分区。"
+                      : ""}
+                  </p>
+                </>
+              )}
+              {weight && ppSupport.level === "none" && (
+                <p className="field-note">该家族未在 Ascend 验证 PP，以下为理论计算结果，仅供参考。</p>
               )}
               <div className="parallel-basic">
                 <NumberField label="Shared Expert TP" value={inputs.sharedExpertTpSize} onChange={(v) => update("sharedExpertTpSize", v)} />
@@ -775,6 +808,15 @@ function NumberField({ label, value, onChange, step = "1" }: { label: string; va
     <label className="field">
       <span>{label}</span>
       <input type="number" min="0" step={step} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
