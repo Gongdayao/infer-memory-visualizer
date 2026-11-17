@@ -207,3 +207,26 @@ legend { margin-bottom: 10px; padding: 0; color: var(--muted); font-size: 11px; 
   .field-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+
+/* PP stage 表 */
+.stage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+.stage-table th,
+.stage-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.stage-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.stage-table tr.worst td {
+  color: var(--rose);
+  font-weight: 600;
+}

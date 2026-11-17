@@ -109,6 +109,8 @@ type KvCacheInput = {
   sequences: number;
   /** 数据并行副本数：总并发序列按 DP 均分到各副本，单卡只承担 1/DP 的 KV。 */
   dpSize?: number;
+  /** PP 下该 stage 覆盖的层数占比（0~1）：KV 只按本 stage 的层计。 */
+  layerShare?: number;
   kvPrecision: CachePrecision;
   indexPrecision: CachePrecision;
   mtpLayers?: number;
@@ -158,6 +160,7 @@ export function calculateKvCache({
   mtpLayers = 0,
   tpSize = 1,
   dpSize = 1,
+  layerShare = 1,
 }: KvCacheInput): KvCacheBreakdown | null {
   const upstream = findUpstreamModel(modelId);
   const info = getKvCacheModelInfo(modelId);
@@ -227,6 +230,10 @@ export function calculateKvCache({
     kvCache = result.kvBytes / safeTp;
     indexCache = result.indexerBytes;
   }
+
+  const share = Number.isFinite(layerShare) && layerShare > 0 ? layerShare : 1;
+  kvCache *= share;
+  indexCache *= share;
 
   return {
     kvCache,

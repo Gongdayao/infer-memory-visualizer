@@ -7,10 +7,12 @@ import { fetchModelWeightData, type ModelWeightData, type WeightLoadProgress } f
 import { calculateWeightFromTensors, type TensorModule } from "./weight-calc";
 import { buildExportSheet, exportFileName } from "./export-excel";
 import { downloadXlsx } from "./xlsx";
+import { partitionLayers, ppEligibility, stageRanges } from "./pp-plan";
 
 type Inputs = {
   maxBatchedTokens: number;
   dpSize: number;
+  ppSize: number;
   tpSize: number;
   attentionTpSize: number | null;
   oprojTpSize: number | null;
@@ -30,6 +32,7 @@ type Inputs = {
 const DEFAULTS: Inputs = {
   maxBatchedTokens: 4096,
   dpSize: 8,
+  ppSize: 1,
   tpSize: 4,
   attentionTpSize: null,
   oprojTpSize: null,
@@ -195,6 +198,9 @@ export default function Home() {
   }, [weightKey, weight]);
 
   const struct = modelData?.struct;
+  // PP：仅对实现了 SupportsPP 的家族开放；层数不足或未登记时禁用。
+  const ppSupport = weight ? ppEligibility(weight.rawName) : { level: "none" as const, reason: "未选择权重" };
+  const ppEligible = ppSupport.level !== "none" && (struct?.numLayers ?? 0) >= 2;
 
   // 权重切分仅依赖已缓存的张量清单与并行参数：改 DP/TP 时只重算、不重拉。
   const weightResult = useMemo(() => {
@@ -294,9 +300,53 @@ export default function Home() {
     }) ?? null : null;
     const kvCache = kvCacheBreakdown?.total ?? 0;
 
-    const weight = weightResult?.perDeviceWeight ?? 0;
+    // ---- PP：按 vLLM 的分区规则切成 stage，逐 stage 计算 ----
+    const pp = ppEligible && struct ? Math.min(Math.max(1, Math.floor(safe(inputs.ppSize, 1))), struct.numLayers) : 1;
+    let stages: Array<{ index: number; start: number; end: number; weight: number; kv: number; total: number }> | null = null;
+    if (pp > 1 && struct && modelData) {
+      const parallel = {
+        tp,
+        ep,
+        attentionTp,
+        oprojTp: Math.max(1, Math.floor(safe(inputs.oprojTpSize ?? tp, 1))),
+        embeddingTp: Math.max(1, Math.floor(safe(inputs.embeddingTpSize ?? tp, 1))),
+        lmHeadTp: Math.max(1, Math.floor(safe(inputs.lmHeadTpSize ?? tp, 1))),
+        sharedExpertTp: Math.max(1, Math.floor(safe(inputs.sharedExpertTpSize, 1))),
+      };
+      const counts = partitionLayers(struct.numLayers, pp);
+      const ranges = stageRanges(counts);
+      stages = ranges.map(([from, to], index) => {
+        const wr = calculateWeightFromTensors(modelData.tensors, parallel, { ranges, stage: index });
+        const stageKv = kvCacheModelId
+          ? calculateKvCache({
+              modelId: kvCacheModelId,
+              tokens: safe(inputs.kvCacheTokens, DEFAULTS.kvCacheTokens),
+              sequences: safe(inputs.kvCacheSequences, DEFAULTS.kvCacheSequences),
+              kvPrecision,
+              indexPrecision,
+              mtpLayers: index === pp - 1 ? Math.floor(safe(inputs.mtpLayers)) : 0,
+              tpSize: attentionTp,
+              dpSize: dp,
+              layerShare: (to - from) / struct.numLayers,
+            })
+          : null;
+        const stageKvBytes = stageKv?.total ?? 0;
+        return {
+          index,
+          start: from,
+          end: to,
+          weight: wr.perDeviceWeight,
+          kv: stageKvBytes,
+          total: wr.perDeviceWeight + stageKvBytes + activation + hccl + graph + cann + deviceOS,
+        };
+      });
+    }
+    const worstStage = stages ? stages.reduce((best, item) => (item.total > best.total ? item : best), stages[0]) : null;
+
+    const weight = worstStage ? worstStage.weight : (weightResult?.perDeviceWeight ?? 0);
     const fullWeight = weightResult?.fullWeight ?? 0;
-    const total = weight + kvCache + activation + hccl + graph + cann + deviceOS;
+    const kvCacheForTotal = worstStage ? worstStage.kv : kvCache;
+    const total = weight + kvCacheForTotal + activation + hccl + graph + cann + deviceOS;
 
     return {
       activation: active * activation,
@@ -314,10 +364,11 @@ export default function Home() {
       attentionTp, graph: active * graph, cann: active * cann, deviceOS: active * deviceOS,
       weight: active * weight, fullWeight: active * fullWeight, kvCache: active * kvCache,
       kvCacheBreakdown, kvCacheInfo, weightResult,
+      pp, stages, worstStageIndex: worstStage ? worstStage.index : null,
       total: active * total, localExperts,
     };
-  // 精度档位从 weightKey/kvCacheModelId 派生，不额外引入依赖；React Compiler 无法证明
-  // weightResult 不会被后续读取路径修改，这里显式豁免该 memo 保留检查。
+  // modelData 与 weightKey 同步变化（加载一次换一个 key），ppEligible 由 weight 派生；
+  // React Compiler 无法证明这些派生值不被后续修改，这里显式豁免 memo 保留检查。
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   }, [inputs, epSize, struct, weightResult, kvCacheModelId, weightKey]);
 
@@ -498,7 +549,15 @@ export default function Home() {
               <div className="field-grid">
                 <NumberField label="DP size" value={inputs.dpSize} onChange={(v) => update("dpSize", v)} />
                 <NumberField label="TP size" value={inputs.tpSize} onChange={(v) => update("tpSize", v)} />
+                {ppEligible && (
+                  <NumberField label="PP size" value={inputs.ppSize ?? 1} onChange={(v) => update("ppSize", v)} />
+                )}
               </div>
+              {weight && !ppEligible && (
+                <p className="field-note">
+                  该权重不开放 PP：{"reason" in ppSupport ? ppSupport.reason : "未登记 PP 支持"}。
+                </p>
+              )}
               <div className="parallel-basic">
                 <NumberField label="Shared Expert TP" value={inputs.sharedExpertTpSize} onChange={(v) => update("sharedExpertTpSize", v)} />
               </div>
@@ -598,6 +657,35 @@ export default function Home() {
                 </article>
               ))}
             </div>
+
+            {result.stages && result.pp > 1 && (
+              <article className="breakdown-card">
+                <div className="panel-heading">
+                  <div><span className="eyebrow">PIPELINE</span><h2>PP 各 stage 显存</h2></div>
+                  <span className="unit-pill">GiB</span>
+                </div>
+                <table className="stage-table">
+                  <thead>
+                    <tr><th>Stage</th><th>层区间</th><th>权重</th><th>KV</th><th>合计</th></tr>
+                  </thead>
+                  <tbody>
+                    {result.stages.map((stage) => (
+                      <tr key={stage.index} className={stage.index === result.worstStageIndex ? "worst" : undefined}>
+                        <td>#{stage.index}</td>
+                        <td>[{stage.start}, {stage.end})</td>
+                        <td>{formatGiB(stage.weight)}</td>
+                        <td>{formatGiB(stage.kv)}</td>
+                        <td>{formatGiB(stage.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="field-note">
+                  单卡显存取最重的 stage（当前 #{result.worstStageIndex}）。PP 只切层：embedding 固定在 stage 0，
+                  final norm / LM head / draft 层固定在末级；专家仍按 DP×TP 切分，不随 PP 再切。
+                </p>
+              </article>
+            )}
 
             <article className="breakdown-card">
               <div className="panel-heading">

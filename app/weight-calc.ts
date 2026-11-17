@@ -10,6 +10,49 @@ import type { SafetensorInfo } from "./safetensors";
 
 export type WeightTensor = Pick<SafetensorInfo, "name" | "dtype" | "shape" | "bytes">;
 
+
+/** 从张量名解析 Transformer 层号；非层内张量返回 null。 */
+export function layerIndexOf(name: string): number | null {
+  const m = /(?:^|\.)layers\.(\d+)\./.exec(name);
+  return m ? Number(m[1]) : null;
+}
+
+/** 投机 draft / MTP 张量：PP 下固定在末级，不参与切分。 */
+export function isDraftTensor(name: string): boolean {
+  return /(?:^|\.)mtp\.\d+\./.test(name) || /\.mtp\./.test(name);
+}
+
+/** 输出侧模块（final norm / LM head），固定末级。 */
+export function isOutputEdge(name: string): boolean {
+  if (isDraftTensor(name)) return true;
+  if (/(^|\.)lm_head\./.test(name)) return true;
+  if (/(^|\.)(norm|final_norm)\.weight$/.test(name)) return true;
+  return false;
+}
+
+/** 输入侧模块（词嵌入），固定首级。 */
+export function isInputEdge(name: string): boolean {
+  if (/(^|\.)embed_tokens\./.test(name) || /(^|\.)embed\.weight$/.test(name)) return true;
+  if (/(^|\.)wte\./.test(name)) return true;
+  return false;
+}
+
+/** 张量在 PP 中的归属：stage 下标或 "replicated"（每个 stage 都持有）。 */
+export function stageOfTensor(name: string, ranges: Array<[number, number]>): number | "replicated" {
+  // 投机 draft / MTP 层不参与切分，固定在末级（vllm-ascend PP 文档）。
+  if (isDraftTensor(name)) return ranges.length - 1;
+  const layer = layerIndexOf(name);
+  if (layer !== null) {
+    for (let i = 0; i < ranges.length; i++) {
+      if (layer >= ranges[i][0] && layer < ranges[i][1]) return i;
+    }
+    return ranges.length - 1;
+  }
+  if (isDraftTensor(name) || isOutputEdge(name)) return ranges.length - 1;
+  if (isInputEdge(name)) return 0;
+  return "replicated";
+}
+
 export type TensorModule =
   | "host_memory"
   | "routed_expert"
@@ -22,6 +65,12 @@ export type TensorModule =
   | "norm"
   | "vision"
   | "other";
+
+/** PP 选项：只统计属于指定 stage 的张量（edge 模块按规则归属）。 */
+export type WeightPipeline = {
+  ranges: Array<[number, number]>;
+  stage: number;
+};
 
 export type WeightParallel = {
   tp: number;
@@ -306,6 +355,7 @@ function newBreakdown(): Record<TensorModule, ModuleBreakdown> {
 export function calculateWeightFromTensors(
   tensors: WeightTensor[],
   p: WeightParallel,
+  pipeline?: WeightPipeline,
 ): WeightResult {
   const safe = (v: number, dflt: number) => (Number.isFinite(v) && v > 0 ? v : dflt);
   const tp = safe(p.tp, 1);
@@ -341,6 +391,11 @@ export function calculateWeightFromTensors(
   let fullWeight = 0;
 
   for (const t of tensors) {
+    if (pipeline) {
+      const owner = stageOfTensor(t.name, pipeline.ranges);
+      // 复本张量（vision / rotation 等）每个 stage 都持有；其余必须落在本 stage。
+      if (owner !== "replicated" && owner !== pipeline.stage) continue;
+    }
     const tensorModule = classifyTensor(t.name);
     const bytes = t.bytes || 0;
     fullWeight += bytes;
